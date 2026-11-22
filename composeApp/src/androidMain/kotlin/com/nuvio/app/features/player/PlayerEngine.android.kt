@@ -14,6 +14,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Handler
+import android.os.StatFs
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -22,6 +23,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.RememberObserver
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -55,6 +57,7 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.ForwardingRenderer
@@ -82,6 +85,9 @@ import com.nuvio.app.features.autosync.rememberAutoSyncCoordinator
 import com.nuvio.app.features.autosync.rememberLibmpvAutoSyncCoordinator
 import com.nuvio.app.R
 import com.nuvio.app.features.streams.normalizeStreamType
+import com.nuvio.app.features.streamcache.StreamCacheContextRegistry
+import com.nuvio.app.features.streamcache.StreamCacheRepository
+import com.nuvio.app.features.streamcache.android.AndroidStreamCacheBackend
 import `is`.xyz.mpv.MPV
 import `is`.xyz.mpv.MPVNode
 import `is`.xyz.mpv.Utils
@@ -148,9 +154,41 @@ actual fun PlatformPlayerSurface(
         mutableStateOf(requestedEngine.initialAndroidEngine())
     }
 
+    // Persistent stream cache: both engines may load a local caching proxy URL (or a file:// URL
+    // of a fully cached entry) instead of sourceUrl. Prepared once here, above the engine switch,
+    // so an engine fallback reuses the same proxy session; released exactly once when the source
+    // changes or the surface leaves composition. Only streams with a context registered by the
+    // player screen are eligible. AutoSync, hashing, chapters and subtitles keep sourceUrl.
+    val sanitizedHeadersForCache = remember(sourceHeaders) { sanitizePlaybackHeaders(sourceHeaders) }
+    val streamCacheEligible = remember(sourceUrl, sourceAudioUrl, sourceResponseHeaders, streamType, useYoutubeChunkedPlayback) {
+        sourceAudioUrl.isNullOrBlank() &&
+            !useYoutubeChunkedPlayback &&
+            !isLoopbackPlaybackSource(sourceUrl) &&
+            !isAdaptivePlaybackSource(sourceUrl, sourceResponseHeaders, streamType)
+    }
+    val streamCacheLease = remember(sourceUrl, sanitizedHeadersForCache, streamCacheEligible) {
+        StreamCachePlaybackLease(
+            sourceUrl = sourceUrl,
+            headers = sanitizedHeadersForCache,
+            eligible = streamCacheEligible,
+        )
+    }
+    val playbackUrl = streamCacheLease.playbackUrl
+    // Look-ahead only applies when the source really goes through the loopback proxy (never for
+    // P2P / direct / downloads / complete file:// entries). Read once per prepared URL.
+    val streamCacheLookAheadMinutes = remember(streamCacheLease) {
+        if (streamCacheLease.usesStreamCache && isLoopbackPlaybackSource(playbackUrl)) {
+            streamCacheLookAheadMinutes()
+        } else {
+            0
+        }
+    }
+
     when (activeEngine) {
         ResolvedAndroidPlaybackEngine.ExoPlayer -> ExoPlayerSurface(
             sourceUrl = sourceUrl,
+            playbackUrl = playbackUrl,
+            streamCacheLookAheadMs = streamCacheLookAheadMinutes * 60_000,
             sourceAudioUrl = sourceAudioUrl,
             sourceHeaders = sourceHeaders,
             sourceResponseHeaders = sourceResponseHeaders,
@@ -176,6 +214,8 @@ actual fun PlatformPlayerSurface(
             }
             LibmpvPlayerSurface(
                 sourceUrl = sourceUrl,
+                playbackUrl = playbackUrl,
+                streamCacheLookAheadMinutes = streamCacheLookAheadMinutes,
                 sourceAudioUrl = sourceAudioUrl,
                 sourceHeaders = sourceHeaders,
                 externalSubtitles = externalSubtitles,
@@ -206,10 +246,147 @@ private fun AndroidPlaybackEngine.initialAndroidEngine(): ResolvedAndroidPlaybac
         AndroidPlaybackEngine.Libmpv -> ResolvedAndroidPlaybackEngine.Libmpv
     }
 
+/**
+ * One stream-cache playback URL per remembered source. The URL is prepared while the lease is
+ * created (composition, main thread) so the very first load already uses it — no direct load
+ * followed by a proxy reload. A composition that is abandoned calls [onAbandoned], so a session
+ * prepared for it is still released. [StreamCacheRepository.releasePlaybackUrl] runs at most
+ * once, and only when the URL actually differs from the source.
+ */
+private class StreamCachePlaybackLease(
+    private val sourceUrl: String,
+    headers: Map<String, String>,
+    eligible: Boolean,
+) : RememberObserver {
+    val playbackUrl: String = if (eligible) {
+        runCatching {
+            StreamCacheRepository.preparePlaybackUrl(
+                sourceUrl = sourceUrl,
+                headers = headers,
+                context = StreamCacheContextRegistry.get(sourceUrl),
+            )
+        }.onFailure { error ->
+            Log.w(TAG, "Stream cache unavailable for this source", error)
+        }.getOrDefault(sourceUrl)
+    } else {
+        sourceUrl
+    }
+
+    val usesStreamCache: Boolean get() = playbackUrl != sourceUrl
+
+    private var released = false
+
+    override fun onRemembered() = Unit
+
+    override fun onForgotten() = release()
+
+    override fun onAbandoned() = release()
+
+    private fun release() {
+        if (released || !usesStreamCache) return
+        released = true
+        runCatching { StreamCacheRepository.releasePlaybackUrl(playbackUrl) }
+            .onFailure { error -> Log.w(TAG, "Failed to release stream cache playback URL", error) }
+    }
+}
+
+/** HLS / DASH / SmoothStreaming are never routed through the stream cache. */
+private fun isAdaptivePlaybackSource(
+    url: String,
+    responseHeaders: Map<String, String>,
+    streamType: String?,
+): Boolean = runCatching {
+    val mimeType = playbackMediaItemFromUrl(
+        url = url,
+        responseHeaders = sanitizePlaybackResponseHeaders(responseHeaders),
+        streamType = normalizeStreamType(streamType),
+    ).localConfiguration?.mimeType
+    mimeType == MimeTypes.APPLICATION_M3U8 ||
+        mimeType == MimeTypes.APPLICATION_MPD ||
+        mimeType == MimeTypes.APPLICATION_SS
+}.getOrDefault(false)
+
+/** Look-ahead setting of the stream cache in minutes; 0 when off or unavailable. */
+private fun streamCacheLookAheadMinutes(): Int {
+    if (!AndroidStreamCacheBackend.IMPLEMENTATION_READY) return 0
+    return runCatching { AndroidStreamCacheBackend.getOrNull()?.lookAheadMinutes() ?: 0 }
+        .getOrDefault(0)
+        .coerceAtLeast(0)
+}
+
+/**
+ * Load control for ExoPlayer. With stream-cache look-ahead (the source is the loopback proxy),
+ * the time window is raised to the look-ahead ONLY where the byte cap wins over time
+ * (prioritizeTimeOverSizeThresholds = false: the native-memory paths and the stock default
+ * path), so RAM use stays within the existing device-based byte limits. The heap path with
+ * custom buffer settings (time beats bytes) is left unchanged. Deep look-ahead beyond RAM comes
+ * from the proxy + auto-fill writing into the persistent cache.
+ */
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun streamCacheAwareLoadControl(
+    context: Context,
+    bufferSettings: PlaybackBufferSettings,
+    localFileSource: Boolean,
+    lookAheadMs: Int,
+): DefaultLoadControl {
+    val defaultControl = {
+        NuvioExoPlayerPerformanceHelper.buildLoadControl(
+            context,
+            bufferSettings,
+            localFileSource = localFileSource,
+        )
+    }
+    if (lookAheadMs <= 0 || localFileSource) return defaultControl()
+    val nativeMemory = NuvioExoPlayerPerformanceHelper.enabled
+    // Custom settings on the heap path: time beats bytes there, keep the user's window.
+    if (bufferSettings.enabled && !nativeMemory) return defaultControl()
+    return when {
+        // Custom settings on the native path: sanitized() caps the window at the native maximum.
+        bufferSettings.enabled && nativeMemory -> NuvioExoPlayerPerformanceHelper.buildLoadControl(
+            context,
+            bufferSettings.copy(maxBufferMs = maxOf(bufferSettings.maxBufferMs, lookAheadMs)),
+            localFileSource = false,
+        )
+        // Built-in native path, expressed as custom native settings with the same values.
+        nativeMemory -> NuvioExoPlayerPerformanceHelper.buildLoadControl(
+            context,
+            PlaybackBufferSettings(
+                enabled = true,
+                minBufferMs = PlaybackBufferSettings.DEFAULT_MIN_BUFFER_MS,
+                maxBufferMs = maxOf(PlaybackBufferSettings.DEFAULT_MAX_BUFFER_MS, lookAheadMs),
+                bufferForPlaybackMs = 3_000,
+                bufferForPlaybackAfterRebufferMs = 3_000,
+                backBufferDurationMs = PlaybackBufferSettings.DEFAULT_BACK_BUFFER_MS,
+                targetBufferSizeMb = NuvioExoPlayerPerformanceHelper
+                    .getSafeNativeMemoryLimitMb(context)
+                    .coerceAtLeast(PlaybackBufferSettings.MIN_APPLIED_BUFFER_MB),
+            ),
+            localFileSource = false,
+        )
+        // Stock default path (same values as the helper; default byte target, size wins).
+        else -> DefaultLoadControl.Builder()
+            .setBackBuffer(PlaybackBufferSettings.DEFAULT_BACK_BUFFER_MS, true)
+            .setBufferDurationsMs(
+                DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
+                maxOf(50_000, lookAheadMs),
+                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+            )
+            .setPrioritizeTimeOverSizeThresholds(false)
+            .build()
+    }.also {
+        Log.i(TAG, "Stream cache look-ahead ${lookAheadMs / 1000}s applied to load control")
+    }
+}
+
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun ExoPlayerSurface(
     sourceUrl: String,
+    /** URL actually loaded: [sourceUrl], or a stream-cache proxy / file:// URL for it. */
+    playbackUrl: String,
+    /** Stream-cache look-ahead window in ms; 0 unless [playbackUrl] is the loopback proxy. */
+    streamCacheLookAheadMs: Int,
     sourceAudioUrl: String?,
     sourceHeaders: Map<String, String>,
     sourceResponseHeaders: Map<String, String>,
@@ -293,10 +470,12 @@ private fun ExoPlayerSurface(
     val stallSession = remember(playerSourceKey) { PlaybackReopenSession(initialPositionMs) }
     val effectiveDecoderPriority = decoderPriorityOverride ?: playerSettings.decoderPriority
 
-    var resolvedMediaItem by remember(playerSourceKey, externalSubtitles) {
+    val usesStreamCache = playbackUrl != sourceUrl
+    var resolvedMediaItem by remember(playerSourceKey, playbackUrl, externalSubtitles) {
         mutableStateOf(
             playbackMediaItemFromUrl(
-                url = sourceUrl,
+                // The proxy URL ends in /<fileName>, so extension-based MIME inference still works.
+                url = playbackUrl,
                 responseHeaders = sanitizedSourceResponseHeaders,
                 streamType = normalizedStreamType,
             ).buildUpon()
@@ -328,6 +507,7 @@ private fun ExoPlayerSurface(
     val dataSourceFactory = remember(
         context,
         sourceUrl,
+        playbackUrl,
         sanitizedSourceHeaders,
         sanitizedSourceResponseHeaders,
         useYoutubeChunkedPlayback,
@@ -337,7 +517,9 @@ private fun ExoPlayerSurface(
         playerSettings.vodCacheSizeMode,
         playerSettings.vodCacheSizeMb,
     ) {
-        val loopbackSource = isLoopbackPlaybackSource(sourceUrl)
+        // A stream-cache proxy URL is loopback: VodCache is skipped (no double caching) and the
+        // long read timeout applies. The proxy sends the original headers upstream itself.
+        val loopbackSource = isLoopbackPlaybackSource(playbackUrl)
         val upstream = PlatformPlaybackDataSourceFactory.create(
             context = context,
             defaultRequestHeaders = sanitizedSourceHeaders,
@@ -347,7 +529,7 @@ private fun ExoPlayerSurface(
             externalSubtitles = externalSubtitles,
         )
         val mimeType = playbackMediaItemFromUrl(
-            url = sourceUrl,
+            url = playbackUrl,
             responseHeaders = sanitizedSourceResponseHeaders,
             streamType = normalizedStreamType,
         ).localConfiguration?.mimeType
@@ -364,7 +546,8 @@ private fun ExoPlayerSurface(
                 vodCacheEnabled = playerSettings.vodCacheEnabled,
                 youtubeChunked = useYoutubeChunkedPlayback,
                 adaptive = adaptive,
-                loopback = loopbackSource,
+                // Complete stream-cache entries play from file:// and are never VodCached either.
+                loopback = loopbackSource || usesStreamCache,
             )
         ) {
             // upstream ends in a DefaultDataSource, which opens the data: init segment this may add.
@@ -407,6 +590,8 @@ private fun ExoPlayerSurface(
 
     val exoPlayer = remember(
         sourceUrl,
+        playbackUrl,
+        streamCacheLookAheadMs,
         sourceAudioUrl,
         sanitizedSourceHeaders,
         sanitizedSourceResponseHeaders,
@@ -496,9 +681,10 @@ private fun ExoPlayerSurface(
             setParameters(parameters)
         }
 
-        val loadControl = NuvioExoPlayerPerformanceHelper.buildLoadControl(
-            context,
-            PlaybackBufferSettings(
+        val loadControl = streamCacheAwareLoadControl(
+            context = context,
+            lookAheadMs = streamCacheLookAheadMs,
+            bufferSettings = PlaybackBufferSettings(
                 enabled = playerSettings.bufferEngineEnabled,
                 minBufferMs = playerSettings.minBufferMs,
                 maxBufferMs = playerSettings.maxBufferMs,
@@ -1326,6 +1512,10 @@ private fun ExoPlayerSurface(
 @Composable
 private fun LibmpvPlayerSurface(
     sourceUrl: String,
+    /** URL actually loaded: [sourceUrl], or a stream-cache proxy / file:// URL for it. */
+    playbackUrl: String,
+    /** Stream-cache look-ahead in minutes; 0 unless [playbackUrl] is the loopback proxy. */
+    streamCacheLookAheadMinutes: Int,
     sourceAudioUrl: String?,
     sourceHeaders: Map<String, String>,
     externalSubtitles: List<com.nuvio.app.features.streams.StreamSubtitle>,
@@ -1599,8 +1789,17 @@ private fun LibmpvPlayerSurface(
         }
     }
 
-    LaunchedEffect(playerViewRef, sourceUrl, sourceAudioUrl, sanitizedSourceHeaders, externalSubtitles) {
+    LaunchedEffect(
+        playerViewRef,
+        sourceUrl,
+        playbackUrl,
+        streamCacheLookAheadMinutes,
+        sourceAudioUrl,
+        sanitizedSourceHeaders,
+        externalSubtitles,
+    ) {
         val view = playerViewRef ?: return@LaunchedEffect
+        val usesStreamCache = playbackUrl != sourceUrl
         playbackDiagnostics.attempt += 1
         playbackDiagnostics.prepareStartedAtMs = SystemClock.elapsedRealtime()
         Log.i(
@@ -1612,11 +1811,13 @@ private fun LibmpvPlayerSurface(
         latestOnSnapshot.value(snapshot)
         nowPlayingController?.syncPlayback(snapshot)
         view.loadSource(
-            sourceUrl = sourceUrl,
+            sourceUrl = playbackUrl,
             sourceAudioUrl = sourceAudioUrl,
-            requestHeaders = sanitizedSourceHeaders,
+            // The stream-cache proxy sends the original headers upstream itself.
+            requestHeaders = if (usesStreamCache) emptyMap() else sanitizedSourceHeaders,
             externalSubtitles = externalSubtitles,
             playWhenReady = latestPlayWhenReady.value,
+            lookAheadMinutes = streamCacheLookAheadMinutes,
         )
     }
 
@@ -1706,6 +1907,10 @@ private class NuvioLibmpvView(
     private var currentSourceAudioUrl: String? = null
     private var currentRequestHeaders: Map<String, String> = emptyMap()
     private var currentExternalSubtitles: List<com.nuvio.app.features.streams.StreamSubtitle> = emptyList()
+    /** Stream-cache look-ahead for the current source (minutes, 0 = off). mpv thread only. */
+    private var currentLookAheadMinutes = 0
+    /** The demuxer cache options currently differ from the Android defaults. mpv thread only. */
+    private var lookAheadApplied = false
     @Volatile
     private var latestSnapshot = PlayerPlaybackSnapshot()
     /** mpv has opened the current file and read its tracks. */
@@ -1794,6 +1999,7 @@ private class NuvioLibmpvView(
         requestHeaders: Map<String, String>,
         externalSubtitles: List<com.nuvio.app.features.streams.StreamSubtitle>,
         playWhenReady: Boolean,
+        lookAheadMinutes: Int = 0,
     ) {
         surfaceReady.await()
         withContext(mpvDispatcher) {
@@ -1807,6 +2013,7 @@ private class NuvioLibmpvView(
                 currentSourceAudioUrl = sourceAudioUrl
                 currentRequestHeaders = requestHeaders
                 currentExternalSubtitles = externalSubtitles
+                currentLookAheadMinutes = lookAheadMinutes.coerceAtLeast(0)
                 if (!sameSource) {
                     loadCurrentSourceNow(playWhenReady = playWhenReady)
                 } else {
@@ -1823,11 +2030,62 @@ private class NuvioLibmpvView(
         setPausedNow(!playWhenReady)
         mpv.setPropertyString("aid", "auto")
         fileLoaded = false
+        applyLookAheadNow(currentLookAheadMinutes)
         mpv.command("loadfile", sourceUrl.toMpvSource(), "replace")
         currentSourceAudioUrl?.takeIf { it.isNotBlank() }?.let { sourceAudioUrl ->
             mpv.command("audio-add", sourceAudioUrl.toMpvSource(), "auto")
         }
         setPausedNow(!playWhenReady)
+    }
+
+    /**
+     * Read-ahead ("look-ahead") for the next `loadfile` (mirrors iOS MPVPlayerBridge.applyLookAhead).
+     * With minutes > 0 the demuxer cache goes to an on-disk temp file under cacheDir (mpv unlinks
+     * it; it is not the persistent stream cache) so a long window doesn't cost RAM. 0 restores
+     * the current Android values from [initOptions] — only if look-ahead was applied before, so
+     * sources without stream cache are untouched. Failures are logged only, never fatal.
+     */
+    private fun applyLookAheadNow(minutes: Int) {
+        val options: List<Pair<String, String>> = if (minutes > 0) {
+            val seconds = minutes.toLong() * 60L
+            val cacheDirectory = File(context.cacheDir, "mpv-cache")
+            runCatching { cacheDirectory.mkdirs() }
+            // ~4 MB/s worth of the window, clamped to 512 MiB ... 6 GiB, and never more than
+            // half of the disk space above the stream cache's 2 GiB reserve.
+            var budgetMiB = (seconds * 4L).coerceIn(512L, 6L * 1024L)
+            val freeBytes = runCatching { StatFs(context.cacheDir.path).availableBytes }.getOrDefault(-1L)
+            if (freeBytes >= 0L) {
+                val spareMiB = (freeBytes - LOOK_AHEAD_FREE_SPACE_RESERVE_BYTES) / (2L * 1024L * 1024L)
+                budgetMiB = minOf(budgetMiB, maxOf(150L, spareMiB))
+            }
+            listOf(
+                "cache" to "yes",
+                "cache-on-disk" to "yes",
+                "demuxer-cache-dir" to cacheDirectory.absolutePath,
+                "cache-secs" to "$seconds",
+                "demuxer-readahead-secs" to "$seconds",
+                "demuxer-max-bytes" to "${budgetMiB}MiB",
+                "demuxer-max-back-bytes" to "256MiB",
+            )
+        } else {
+            if (!lookAheadApplied) return
+            listOf(
+                "cache" to "auto",
+                "cache-on-disk" to "no",
+                "cache-secs" to "1000",
+                "demuxer-readahead-secs" to "1",
+                "demuxer-max-bytes" to "${libmpvCacheBytes()}",
+                "demuxer-max-back-bytes" to "${libmpvCacheBytes()}",
+            )
+        }
+        lookAheadApplied = minutes > 0
+        options.forEach { (name, value) ->
+            // Runtime option changes are equivalent to setting the property; they take effect
+            // for the file loaded next.
+            runCatching { mpv.setOptionString(name, value).logIfMpvError(name) }
+                .onFailure { error -> Log.w(TAG, "libmpv look-ahead option failed: $name", error) }
+        }
+        if (minutes > 0) Log.i(TAG, "libmpv stream cache look-ahead ${minutes}min applied")
     }
 
     fun onFileStarted() {
@@ -2253,6 +2511,9 @@ private data class LibmpvTrack(
 )
 
 private const val LIBMPV_MAX_VOLUME_PERCENT = 400
+
+/** Same free-space reserve as the stream cache (StreamCacheStore min free bytes, 2 GiB). */
+private const val LOOK_AHEAD_FREE_SPACE_RESERVE_BYTES = 2L * 1024L * 1024L * 1024L
 
 private fun libmpvCacheBytes(): Int =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) 64 * 1024 * 1024 else 32 * 1024 * 1024
