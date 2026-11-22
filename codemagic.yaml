@@ -17,8 +17,8 @@ workflows:
       # Optional runtime secrets. Create an environment group named "nuvio_secrets"
       # in Codemagic (App settings > Environment variables) containing
       # NUVIO_LOCAL_PROPERTIES_BASE64, then uncomment the two lines below.
-      # groups:
-      #   - nuvio_secrets
+      groups:
+        - nuvio_secrets   # must exist in Codemagic (see Docs/codemagic.md)
       vars:
         GRADLE_OPTS: -Dfile.encoding=UTF-8
         IOS_CONFIGURATION: Release
