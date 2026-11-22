@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.QueuePlayNext
 import androidx.compose.material.icons.filled.RoundedCorner
 import androidx.compose.material.icons.filled.SmartDisplay
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VideoSettings
@@ -133,6 +134,11 @@ internal enum class SettingsPage(
     ),
     PlaybackP2p(
         titleRes = Res.string.settings_playback_page_p2p,
+        category = SettingsCategory.Watch,
+        parentPage = Playback,
+    ),
+    PlaybackStreamCache(
+        titleRes = Res.string.stream_cache_title,
         category = SettingsCategory.Watch,
         parentPage = Playback,
     ),
@@ -277,4 +283,5 @@ internal val SettingsPage.icon: ImageVector
         SettingsPage.PlaybackVideo -> Icons.Default.VideoSettings
         SettingsPage.PlaybackBuffer -> Icons.Default.NetworkCheck
         SettingsPage.PlaybackP2p -> Icons.Default.Hub
+        SettingsPage.PlaybackStreamCache -> Icons.Default.Storage
     }

@@ -1,5 +1,6 @@
 package com.nuvio.app.features.downloads
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,11 +12,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.app.core.ui.NuvioActionLabel
 import com.nuvio.app.core.ui.NuvioScreen
@@ -39,6 +44,7 @@ import com.nuvio.app.core.ui.NuvioTokens
 import com.nuvio.app.core.ui.PlatformBackHandler
 import com.nuvio.app.core.ui.nuvio
 import com.nuvio.app.core.ui.nuvioTypeScale
+import com.nuvio.app.features.streamcache.StreamCacheRepository
 import com.nuvio.app.features.watched.WatchedRepository
 import com.nuvio.app.features.watchprogress.WatchProgressRepository
 import nuvio.composeapp.generated.resources.Res
@@ -62,6 +68,9 @@ import nuvio.composeapp.generated.resources.downloads_titles
 import nuvio.composeapp.generated.resources.downloads_watched_count
 import nuvio.composeapp.generated.resources.episodes_season
 import nuvio.composeapp.generated.resources.episodes_specials
+import nuvio.composeapp.generated.resources.stream_cache_downloads_entry
+import nuvio.composeapp.generated.resources.stream_cache_items
+import nuvio.composeapp.generated.resources.stream_cache_used_summary
 import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
 
@@ -73,6 +82,8 @@ fun DownloadsScreen(
     initialShowId: String? = null,
     onNavigateToShow: ((showId: String, title: String) -> Unit)? = null,
     onBackFromShow: (() -> Unit)? = null,
+    /** Opens the stream cache manager; null hides the entry (platforms without a stream cache). */
+    onOpenStreamCache: (() -> Unit)? = null,
 ) {
     val uiState by remember {
         DownloadsRepository.ensureLoaded()
@@ -143,6 +154,11 @@ fun DownloadsScreen(
 
         val showId = selectedShowId
         if (showId == null) {
+            if (onOpenStreamCache != null && StreamCacheRepository.isSupported) {
+                item(key = "stream_cache_entry") {
+                    StreamCacheEntryRow(onClick = onOpenStreamCache)
+                }
+            }
             downloadsRootContent(
                 items = uiState.items,
                 speeds = speeds,
@@ -339,6 +355,69 @@ private fun LazyListScope.downloadsShowContent(
                 }
             }
         }
+}
+
+@Composable
+private fun StreamCacheEntryRow(onClick: () -> Unit) {
+    val tokens = MaterialTheme.nuvio
+    val streamCacheState by StreamCacheRepository.uiState.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) {
+        StreamCacheRepository.ensureObserving()
+    }
+    val count = streamCacheState.items.size
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        color = tokens.colors.surface,
+        shape = tokens.shapes.card,
+        border = BorderStroke(tokens.borders.hairline, tokens.colors.borderSubtle),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = NuvioTokens.Space.s14, vertical = NuvioTokens.Space.s12),
+            horizontalArrangement = Arrangement.spacedBy(NuvioTokens.Space.s12),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(NuvioTokens.Space.s36)
+                    .clip(tokens.shapes.compactCard)
+                    .background(tokens.colors.accent.copy(alpha = tokens.opacity.pressed)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Storage,
+                    contentDescription = null,
+                    tint = tokens.colors.accent,
+                    modifier = Modifier.size(NuvioTokens.Icon.md),
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(NuvioTokens.Space.s2),
+            ) {
+                Text(
+                    text = stringResource(Res.string.stream_cache_downloads_entry),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = tokens.colors.textPrimary,
+                )
+                Text(
+                    text = listOf(
+                        pluralStringResource(Res.plurals.stream_cache_items, count, count),
+                        stringResource(Res.string.stream_cache_used_summary, formatBytes(streamCacheState.config.usedBytes)),
+                    ).joinToString(DownloadTextSeparator),
+                    style = MaterialTheme.nuvioTypeScale.bodySm,
+                    color = tokens.colors.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = null,
+                tint = tokens.colors.textMuted,
+            )
+        }
+    }
 }
 
 @Composable

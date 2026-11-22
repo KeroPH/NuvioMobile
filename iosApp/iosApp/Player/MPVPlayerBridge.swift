@@ -1525,5 +1525,6 @@ final class MPVPlayerBridgeCreator: NSObject, NuvioPlayerBridgeCreator {
 enum NuvioPlayerRegistration {
     static func register() {
         NuvioPlayerBridgeFactory.shared.registerFactory(creator: MPVPlayerBridgeCreator())
+        NuvioStreamCacheBridgeRegistry.shared.register(bridge: StreamCacheBridgeImpl.shared)
     }
 }

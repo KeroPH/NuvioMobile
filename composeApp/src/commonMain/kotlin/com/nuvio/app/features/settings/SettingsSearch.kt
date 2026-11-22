@@ -36,6 +36,7 @@ import com.nuvio.app.core.ui.NuvioTokens
 import com.nuvio.app.core.ui.nuvio
 import com.nuvio.app.features.p2p.P2pSettingsRepository
 import com.nuvio.app.features.player.PlayerSettingsRepository
+import com.nuvio.app.features.streamcache.StreamCacheRepository
 import com.nuvio.app.isIos
 import com.nuvio.app.supportsPosterNavigationMotion
 import nuvio.composeapp.generated.resources.*
@@ -120,7 +121,12 @@ internal fun settingsSearchEntries(
         PlayerSettingsRepository.ensureLoaded()
         PlayerSettingsRepository.uiState
     }.collectAsStateWithLifecycle()
-    val playbackSections = visiblePlaybackSections(isIos, playerSettings.androidPlaybackEngine, P2pSettingsRepository.isVisible)
+    val playbackSections = visiblePlaybackSections(
+        ios = isIos,
+        engine = playerSettings.androidPlaybackEngine,
+        p2pVisible = P2pSettingsRepository.isVisible,
+        streamCacheSupported = StreamCacheRepository.isSupported,
+    )
     val entries = mutableListOf<SettingsSearchEntry>()
 
     fun add(
@@ -235,6 +241,22 @@ internal fun settingsSearchEntries(
             section = pageTitles.getValue(section.page),
         )
     }
+    addRow(
+        page = SettingsPage.PlaybackStreamCache,
+        key = "stream-cache-enabled",
+        title = stringResource(Res.string.stream_cache_enable_title),
+        description = stringResource(Res.string.stream_cache_enable_description),
+        pageLabel = playbackPage,
+        section = pageTitles.getValue(SettingsPage.PlaybackStreamCache),
+    )
+    addRow(
+        page = SettingsPage.PlaybackStreamCache,
+        key = "stream-cache-size-limit",
+        title = stringResource(Res.string.stream_cache_limit_title),
+        description = stringResource(Res.string.stream_cache_limit_description),
+        pageLabel = playbackPage,
+        section = pageTitles.getValue(SettingsPage.PlaybackStreamCache),
+    )
     addPage(
         page = SettingsPage.Advanced,
         key = "advanced",

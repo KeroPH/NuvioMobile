@@ -29,8 +29,11 @@ import co.touchlab.kermit.Logger
 import com.nuvio.app.features.autosync.AutoSyncMpvCoordinator
 import com.nuvio.app.features.autosync.AutoSyncMpvEngineController
 import com.nuvio.app.features.autosync.IosAutoSyncMpvPlatform
+import com.nuvio.app.features.streamcache.StreamCacheContextRegistry
+import com.nuvio.app.features.streamcache.StreamCacheRepository
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.useContents
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.serialization.encodeToString
@@ -334,18 +337,38 @@ actual fun PlatformPlayerSurface(
     }
 
     // Load file and set initial state
+    // mpv may load a local caching proxy URL instead of sourceUrl (persistent stream cache); only
+    // streams with a context registered by the player screen are eligible. Everything else
+    // (AutoSync, hashing, subtitles) keeps using the original sourceUrl. Each prepared URL is
+    // released exactly once, when this effect is replaced or the surface leaves composition.
     LaunchedEffect(bridge, sourceUrl, sourceAudioUrl, sourceHeaders, externalSubtitles) {
-        bridge.applyIosVideoOutputSettings(latestPlayerSettings.value)
-        bridge.loadFileWithAudio(
-            videoUrl = sourceUrl,
-            audioUrl = sourceAudioUrl,
-            headersJson = encodePlaybackHeadersForBridge(sourceHeaders),
-            subtitlesJson = encodeExternalSubtitlesForBridge(externalSubtitles),
-        )
-        if (playWhenReady) {
-            bridge.play()
+        val playbackUrl = if (sourceAudioUrl == null) {
+            StreamCacheRepository.preparePlaybackUrl(
+                sourceUrl = sourceUrl,
+                headers = sanitizedSourceHeaders,
+                context = StreamCacheContextRegistry.get(sourceUrl),
+            )
         } else {
-            bridge.pause()
+            sourceUrl
+        }
+        val usesStreamCache = playbackUrl != sourceUrl
+        try {
+            bridge.applyIosVideoOutputSettings(latestPlayerSettings.value)
+            bridge.loadFileWithAudio(
+                videoUrl = playbackUrl,
+                audioUrl = sourceAudioUrl,
+                // The proxy sends the original headers upstream itself.
+                headersJson = if (usesStreamCache) null else encodePlaybackHeadersForBridge(sourceHeaders),
+                subtitlesJson = encodeExternalSubtitlesForBridge(externalSubtitles),
+            )
+            if (playWhenReady) {
+                bridge.play()
+            } else {
+                bridge.pause()
+            }
+            if (usesStreamCache) awaitCancellation()
+        } finally {
+            if (usesStreamCache) StreamCacheRepository.releasePlaybackUrl(playbackUrl)
         }
     }
 

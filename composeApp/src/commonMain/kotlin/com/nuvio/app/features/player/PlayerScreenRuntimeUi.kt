@@ -221,6 +221,8 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi(
         val resolvedAutoEngine = resolvedAutoEngineState.value
 
         if (playerSurfaceSourceUrl != null) {
+            // Must happen before the surface's load effect runs (iOS persistent stream cache).
+            registerActiveStreamCacheContext(playerSurfaceSourceUrl)
             key(playbackKey) {
                 val active = remember { mutableStateOf(true) }
                 DisposableEffect(Unit) {

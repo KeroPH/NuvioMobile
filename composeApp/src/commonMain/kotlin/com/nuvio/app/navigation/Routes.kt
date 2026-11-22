@@ -97,6 +97,10 @@ data class DownloadShowRoute(
     override val title: String,
 ) : AppRoute
 
+/** Stream cache manager opened from Downloads (iOS only; Settings uses the PlaybackStreamCache page). */
+@Serializable
+data class StreamCacheRoute(override val title: String = "") : AppRoute
+
 @Serializable
 data class AddonsSettingsRoute(override val title: String = "") : SettingsDestinationRoute
 

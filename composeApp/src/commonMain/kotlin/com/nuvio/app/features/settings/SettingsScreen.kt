@@ -90,6 +90,7 @@ import com.nuvio.app.features.watchprogress.ContinueWatchingPreferencesUiState
 import com.nuvio.app.navigation.LocalUseNativeNavigation
 import com.nuvio.app.features.party.PartyRepository
 import com.nuvio.app.features.p2p.P2pSettingsRepository
+import com.nuvio.app.features.streamcache.StreamCacheRepository
 import com.nuvio.app.isIos
 import nuvio.composeapp.generated.resources.Res
 import nuvio.composeapp.generated.resources.compose_settings_page_root
@@ -115,6 +116,7 @@ private fun SettingsPage.isEnabledByPolicy(): Boolean =
         SettingsPage.SupportersContributors -> AppFeaturePolicy.supportersContributorsPageEnabled
         SettingsPage.PlaybackP2p -> P2pSettingsRepository.isVisible
         SettingsPage.PlaybackBuffer -> !isIos
+        SettingsPage.PlaybackStreamCache -> StreamCacheRepository.isSupported
         else -> true
     }
 
@@ -662,7 +664,8 @@ private fun MobileSettingsScreen(
                 SettingsPage.PlaybackSubtitles,
                 SettingsPage.PlaybackVideo,
                 SettingsPage.PlaybackBuffer,
-                SettingsPage.PlaybackP2p -> playbackSettingsContent(
+                SettingsPage.PlaybackP2p,
+                SettingsPage.PlaybackStreamCache -> playbackSettingsContent(
                     isTablet = false,
                     page = page,
                     onPageChange = onPageChange,
@@ -1064,7 +1067,8 @@ private fun TabletSettingsScreen(
                     SettingsPage.PlaybackSubtitles,
                     SettingsPage.PlaybackVideo,
                     SettingsPage.PlaybackBuffer,
-                    SettingsPage.PlaybackP2p -> playbackSettingsContent(
+                    SettingsPage.PlaybackP2p,
+                    SettingsPage.PlaybackStreamCache -> playbackSettingsContent(
                         isTablet = true,
                         page = page,
                         onPageChange = ::openInlinePage,

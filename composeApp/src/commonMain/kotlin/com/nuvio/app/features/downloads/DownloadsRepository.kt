@@ -288,6 +288,56 @@ object DownloadsRepository {
         persist()
     }
 
+    /**
+     * Reserves an id and builds the destination file name (same naming scheme as stream downloads)
+     * for a file that is about to be imported as a completed download.
+     */
+    internal fun reserveImportedDownload(
+        title: String,
+        seasonNumber: Int?,
+        episodeNumber: Int?,
+        episodeTitle: String?,
+        fallbackTitle: String,
+        fileExtension: String,
+    ): Pair<String, String> {
+        ensureLoaded()
+        val downloadId = nextDownloadId(DownloadsClock.nowEpochMs())
+        val fileName = buildFileName(
+            title = title,
+            seasonNumber = seasonNumber,
+            episodeNumber = episodeNumber,
+            episodeTitle = episodeTitle,
+            fallbackTitle = fallbackTitle,
+            sourceUrl = "imported.$fileExtension",
+            downloadId = downloadId,
+        )
+        return downloadId to fileName
+    }
+
+    /**
+     * Adds an already completed download whose file is in place (e.g. moved from the stream cache).
+     * Replaces an existing download of the same content, like [enqueueFromStream] does.
+     */
+    internal fun importCompletedDownload(item: DownloadItem) {
+        ensureLoaded()
+        val currentItems = _uiState.value.items.toMutableList()
+        currentItems
+            .filter { it.logicalContentKey == item.logicalContentKey || it.id == item.id }
+            .forEach { existing ->
+                activeHandles.remove(existing.id)?.cancel()
+                val existingUri = playableLocalFileUri(existing) ?: existing.localFileUri
+                if (existingUri != item.localFileUri && existing.fileName != item.fileName) {
+                    DownloadsPlatformDownloader.removeFile(existingUri)
+                    DownloadsPlatformDownloader.removePartialFile(existing.fileName)
+                }
+                currentItems.removeAll { it.id == existing.id }
+            }
+        currentItems.add(0, item.copy(status = DownloadStatus.Completed, errorMessage = null))
+        publish(currentItems)
+        _hasUnseenCompleted.value = true
+        persist()
+    }
+
     private fun loadFromDisk() {
         _hasUnseenCompleted.value = false
         hasLoaded = true

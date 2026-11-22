@@ -394,6 +394,9 @@ private fun NSURLResponse?.toDownloadResult(): IosDownloadResult {
     )
 }
 
+/** Directory completed downloads live in (created on demand, excluded from backup). */
+internal fun iosDownloadsDirectoryPath(): String = downloadsDirectoryPath()
+
 @OptIn(ExperimentalForeignApi::class)
 private fun downloadsDirectoryPath(): String {
     val root = NSHomeDirectory().trimEnd('/')

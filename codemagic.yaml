@@ -1,0 +1,82 @@
+# Codemagic equivalent of .github/workflows/ios-test-build.yml (Release configuration).
+# Builds an UNSIGNED "full" distribution IPA for sideloading.
+# See Docs/codemagic.md for setup instructions.
+
+workflows:
+  ios-unsigned-ipa:
+    name: iOS unsigned full Release IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      # The GitHub workflow pins /Applications/Xcode_27.1.app. Codemagic ships 27.1.x,
+      # so pin it for parity ("latest" may resolve to a newer/edge Xcode).
+      xcode: 27.1
+      java: 17
+      # Optional runtime secrets. Create an environment group named "nuvio_secrets"
+      # in Codemagic (App settings > Environment variables) containing
+      # NUVIO_LOCAL_PROPERTIES_BASE64, then uncomment the two lines below.
+      # groups:
+      #   - nuvio_secrets
+      vars:
+        GRADLE_OPTS: -Dfile.encoding=UTF-8
+        IOS_CONFIGURATION: Release
+        KOTLIN_DAEMON_JVMARGS: -Xmx2048M
+        NUVIO_GRADLE_JVMARGS: -Xmx4608M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M
+        NUVIO_KOTLIN_NATIVE_JVMARGS: -Xmx4608M
+    cache:
+      cache_paths:
+        - $HOME/.konan
+        - $HOME/.gradle/caches
+        - $HOME/.gradle/wrapper
+    scripts:
+      - name: Verify Apple toolchain
+        script: |
+          set -euo pipefail
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          java -version
+
+      - name: Configure runtime properties
+        script: |
+          set -euo pipefail
+          if [[ -n "${NUVIO_LOCAL_PROPERTIES_BASE64:-}" ]]; then
+            printf '%s' "${NUVIO_LOCAL_PROPERTIES_BASE64}" | base64 --decode > local.properties
+            sed -i '' -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
+            echo "local.properties written from NUVIO_LOCAL_PROPERTIES_BASE64."
+          else
+            echo "NUVIO_LOCAL_PROPERTIES_BASE64 not set; building without runtime secrets."
+          fi
+
+      - name: Prepare iOS dependencies
+        script: |
+          set -euo pipefail
+          chmod +x scripts/*.sh
+          # Only MPVKit is a real submodule (.gitmodules); the repo also contains an
+          # orphan "libass-android" gitlink with no .gitmodules entry, so never run a
+          # bare "git submodule update --init --recursive" here.
+          git submodule sync -- MPVKit
+          git submodule update --init --depth 1 MPVKit
+          # Downloads NuvioEngine.xcframework (v0.1.6, checksum-verified) into
+          # ../nuvio-engine, the path hard-coded in composeApp/build.gradle.kts.
+          ./scripts/prepare-ios-dependencies.sh
+
+      - name: Build unsigned full Release IPA
+        script: |
+          set -euo pipefail
+          ./scripts/build-ios-ipa.sh
+
+      - name: Summarize IPA
+        script: |
+          set -euo pipefail
+          configuration_slug="$(printf '%s' "${IOS_CONFIGURATION}" | tr '[:upper:]' '[:lower:]')"
+          ipa_path="$(find build/ios-ipa -maxdepth 1 -type f -name "*-full-${configuration_slug}.ipa" -print -quit)"
+          if [[ -z "${ipa_path}" ]]; then
+            echo "No IPA was produced." >&2
+            exit 1
+          fi
+          echo "File: $(basename "${ipa_path}")"
+          echo "Size: $(du -h "${ipa_path}" | cut -f1)"
+          echo "SHA-256: $(shasum -a 256 "${ipa_path}" | awk '{print $1}')"
+          echo "Distribution: full / Configuration: ${IOS_CONFIGURATION} / Signing: unsigned"
+    artifacts:
+      - build/ios-ipa/*.ipa

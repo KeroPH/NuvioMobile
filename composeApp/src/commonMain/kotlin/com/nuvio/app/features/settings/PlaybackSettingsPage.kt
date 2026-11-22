@@ -1,12 +1,18 @@
 package com.nuvio.app.features.settings
 
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.nuvio.app.features.downloads.formatBytes
 import com.nuvio.app.features.p2p.P2pSettingsRepository
 import com.nuvio.app.features.player.PlayerSettingsRepository
+import com.nuvio.app.features.streamcache.StreamCacheManagerContent
+import com.nuvio.app.features.streamcache.StreamCacheRepository
 import com.nuvio.app.isIos
+import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.stream_cache_used_summary
 import org.jetbrains.compose.resources.stringResource
 
 internal fun LazyListScope.playbackSettingsContent(
@@ -21,13 +27,30 @@ internal fun LazyListScope.playbackSettingsContent(
         }.collectAsStateWithLifecycle()
         when (page) {
             SettingsPage.Playback -> {
-                val sections = visiblePlaybackSections(isIos, settings.androidPlaybackEngine, P2pSettingsRepository.isVisible)
+                val streamCacheSupported = StreamCacheRepository.isSupported
+                val streamCacheState by StreamCacheRepository.uiState.collectAsStateWithLifecycle()
+                if (streamCacheSupported) {
+                    LaunchedEffect(Unit) { StreamCacheRepository.ensureObserving() }
+                }
+                val sections = visiblePlaybackSections(
+                    ios = isIos,
+                    engine = settings.androidPlaybackEngine,
+                    p2pVisible = P2pSettingsRepository.isVisible,
+                    streamCacheSupported = streamCacheSupported,
+                )
                 SettingsGroup(isTablet = isTablet) {
                     sections.forEachIndexed { index, section ->
                         if (index > 0) SettingsGroupDivider(isTablet = isTablet)
                         SettingsNavigationRow(
                             title = stringResource(section.page.titleRes),
-                            description = stringResource(section.descriptionRes),
+                            description = if (section == PlaybackSection.StreamCache && streamCacheState.isSupported) {
+                                stringResource(
+                                    Res.string.stream_cache_used_summary,
+                                    formatBytes(streamCacheState.config.usedBytes),
+                                )
+                            } else {
+                                stringResource(section.descriptionRes)
+                            },
                             isTablet = isTablet,
                             onClick = { onPageChange(section.page) },
                         )
@@ -44,6 +67,7 @@ internal fun LazyListScope.playbackSettingsContent(
             SettingsPage.PlaybackVideo -> PlaybackVideoSettings(isTablet, settings)
             SettingsPage.PlaybackBuffer -> if (!isIos) PlaybackBufferSettings(isTablet, settings)
             SettingsPage.PlaybackP2p -> if (P2pSettingsRepository.isVisible) PlaybackP2pSettings(isTablet)
+            SettingsPage.PlaybackStreamCache -> if (StreamCacheRepository.isSupported) StreamCacheManagerContent(isTablet)
             else -> Unit
         }
     }
