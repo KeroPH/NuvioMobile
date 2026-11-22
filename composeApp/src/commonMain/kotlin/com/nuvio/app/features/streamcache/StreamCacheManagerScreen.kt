@@ -36,6 +36,8 @@ import nuvio.composeapp.generated.resources.Res
 import nuvio.composeapp.generated.resources.action_cancel
 import nuvio.composeapp.generated.resources.action_delete
 import nuvio.composeapp.generated.resources.action_delete_confirm_message
+import nuvio.composeapp.generated.resources.stream_cache_auto_fill_description
+import nuvio.composeapp.generated.resources.stream_cache_auto_fill_title
 import nuvio.composeapp.generated.resources.stream_cache_clear_all
 import nuvio.composeapp.generated.resources.stream_cache_clear_all_message
 import nuvio.composeapp.generated.resources.stream_cache_clear_all_title
@@ -49,6 +51,10 @@ import nuvio.composeapp.generated.resources.stream_cache_limit_description
 import nuvio.composeapp.generated.resources.stream_cache_limit_footer
 import nuvio.composeapp.generated.resources.stream_cache_limit_title
 import nuvio.composeapp.generated.resources.stream_cache_limit_unlimited
+import nuvio.composeapp.generated.resources.stream_cache_look_ahead_default
+import nuvio.composeapp.generated.resources.stream_cache_look_ahead_description
+import nuvio.composeapp.generated.resources.stream_cache_look_ahead_minutes
+import nuvio.composeapp.generated.resources.stream_cache_look_ahead_title
 import nuvio.composeapp.generated.resources.stream_cache_save_failed
 import nuvio.composeapp.generated.resources.stream_cache_saved
 import nuvio.composeapp.generated.resources.stream_cache_section_items
@@ -139,6 +145,33 @@ internal fun StreamCacheManagerContent(
                             },
                             selected = config.maxBytes == option,
                             onClick = { StreamCacheRepository.setMaxBytes(option) },
+                        )
+                    }
+                }
+                SettingsGroupDivider(isTablet = isTablet)
+                SettingsSwitchRow(
+                    title = stringResource(Res.string.stream_cache_auto_fill_title),
+                    description = stringResource(Res.string.stream_cache_auto_fill_description),
+                    checked = config.autoFillWhilePlaying,
+                    enabled = config.enabled,
+                    isTablet = isTablet,
+                    onCheckedChange = StreamCacheRepository::setAutoFillWhilePlaying,
+                )
+                SettingsGroupDivider(isTablet = isTablet)
+                SettingsChipRow(
+                    title = stringResource(Res.string.stream_cache_look_ahead_title),
+                    description = stringResource(Res.string.stream_cache_look_ahead_description),
+                    isTablet = isTablet,
+                ) {
+                    StreamCacheDefaults.LOOK_AHEAD_MINUTES_OPTIONS.forEach { option ->
+                        Chip(
+                            label = if (option <= 0) {
+                                stringResource(Res.string.stream_cache_look_ahead_default)
+                            } else {
+                                stringResource(Res.string.stream_cache_look_ahead_minutes, option)
+                            },
+                            selected = config.lookAheadMinutes == option,
+                            onClick = { StreamCacheRepository.setLookAheadMinutes(option) },
                         )
                     }
                 }

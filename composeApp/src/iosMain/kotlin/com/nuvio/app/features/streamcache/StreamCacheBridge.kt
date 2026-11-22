@@ -23,6 +23,10 @@ interface NuvioStreamCacheBridge {
     fun setEnabled(enabled: Boolean)
     /** 0 = unlimited. */
     fun setMaxBytes(maxBytes: Long)
+    /** Start a background "finish download" automatically whenever a cached stream starts playing. */
+    fun setAutoFillWhilePlaying(enabled: Boolean)
+    /** Player read-ahead in minutes (0 = mpv default). Applied by the Swift player on the next load. */
+    fun setLookAheadMinutes(minutes: Int)
 
     /** JSON array matching List<StreamCacheEntry>. */
     fun listEntriesJson(): String

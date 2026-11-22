@@ -65,6 +65,9 @@ final class StreamCacheFiller {
 }
 
 /// One fill operation. Requests ≤ 8 MiB spans one after another and streams them to disk.
+/// Before every chunk the gap is recomputed from the current cached ranges (starting just ahead
+/// of the proxy's playhead, wrapping to earlier gaps); while receiving, the request is abandoned
+/// as soon as it runs into bytes someone else (the live proxy) already cached.
 /// All state is confined to `queue`.
 final class StreamCacheFillJob: StreamCacheUpstreamReceiver {
     private static let chunkSize: Int64 = 8 * 1024 * 1024
@@ -253,6 +256,12 @@ final class StreamCacheFillJob: StreamCacheUpstreamReceiver {
             return
         }
         position += Int64(chunk.count)
+        // The live proxy may have cached the bytes ahead of us meanwhile: stop this request and
+        // pick the next gap instead of downloading them twice (no retry penalty).
+        if position <= requestEnd, store.cachedEnd(id: id, containing: position) != nil {
+            restartNeeded = true
+            current.cancel()
+        }
     }
 
     private func handleCompletion(task: URLSessionTask, error: Error?) {

@@ -284,6 +284,7 @@ final class StreamCacheProxyConnection: StreamCacheUpstreamReceiver {
     private func pump() {
         guard !closed, !finishing, servingMain, headersSent, fetch == nil, let session = session else { return }
         let id = session.entryId
+        store.notePlayhead(id: id, offset: position)
         while queuedBytes < StreamCacheProxyConnection.diskHighWater {
             if position > endInclusive {
                 finishResponse()
@@ -510,8 +511,17 @@ final class StreamCacheProxyConnection: StreamCacheUpstreamReceiver {
             }
             send(chunk)
             position += Int64(chunk.count)
+            if let entryId = session?.entryId {
+                store.notePlayhead(id: entryId, offset: position)
+            }
             if position > current.segmentEnd {
                 // Reached the next cached span (or the requested end): continue from disk.
+                cancelFetch()
+                pump()
+            } else if cacheWrites, let entryId = session?.entryId,
+                      store.cachedEnd(id: entryId, containing: position) != nil {
+                // The filler cached the bytes ahead meanwhile: serve them from disk instead of
+                // downloading them again (pump starts a new segment at the next gap).
                 cancelFetch()
                 pump()
             } else {

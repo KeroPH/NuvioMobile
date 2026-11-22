@@ -113,4 +113,25 @@ struct StreamCacheRangeSet: Equatable {
         }
         return position < total ? StreamCacheSpan(start: position, end: total) : nil
     }
+
+    /// First missing span at or after `anchor` (clipped to start at `anchor`); when there is none,
+    /// wraps around to the first gap from 0. Nil when `[0, total)` is complete.
+    func firstGap(total: Int64, from anchor: Int64) -> StreamCacheSpan? {
+        guard total > 0 else { return nil }
+        if anchor > 0, anchor < total {
+            var position = anchor
+            for span in spans {
+                if span.end <= position { continue }
+                if span.start > position {
+                    return StreamCacheSpan(start: position, end: min(span.start, total))
+                }
+                position = span.end
+                if position >= total { break }
+            }
+            if position < total {
+                return StreamCacheSpan(start: position, end: total)
+            }
+        }
+        return firstGap(total: total)
+    }
 }

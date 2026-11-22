@@ -98,7 +98,27 @@ final class StreamCacheBridgeImpl: NSObject, NuvioStreamCacheBridge {
             return sourceUrl
         }
         let session = proxy.registerSession(entryId: id, upstreamURL: url, headers: headers, fileName: fileName)
+        if store.autoFillWhilePlaying {
+            StreamCacheBridgeImpl.scheduleAutoFill(id: id)
+        }
         return proxy.playbackURL(port: port, session: session)
+    }
+
+    /// Delay before an automatic fill starts, so the player's own first requests get the bandwidth.
+    private static let autoFillDelay: TimeInterval = 8
+
+    /// "Fill while playing": after a short delay, downloads the rest of the file in the background.
+    /// The fill keeps running after playback ends; turning the setting off does not cancel it.
+    private static func scheduleAutoFill(id: String) {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + autoFillDelay) {
+            let store = StreamCacheStore.shared
+            guard store.isEnabled,
+                  store.autoFillWhilePlaying,
+                  store.hasEnoughFreeSpace(),
+                  store.canAutoFill(id: id) else { return }
+            print("[StreamCache] auto-fill while playing for \(id)")
+            StreamCacheFiller.shared.startFill(id: id)
+        }
     }
 
     func releasePlaybackUrl(playbackUrl: String) {
@@ -115,6 +135,14 @@ final class StreamCacheBridgeImpl: NSObject, NuvioStreamCacheBridge {
 
     func setMaxBytes(maxBytes: Int64) {
         StreamCacheStore.shared.setMaxBytes(maxBytes)
+    }
+
+    func setAutoFillWhilePlaying(enabled: Bool) {
+        StreamCacheStore.shared.setAutoFillWhilePlaying(enabled)
+    }
+
+    func setLookAheadMinutes(minutes: Int32) {
+        StreamCacheStore.shared.setLookAheadMinutes(Int(minutes))
     }
 
     func listEntriesJson() -> String {

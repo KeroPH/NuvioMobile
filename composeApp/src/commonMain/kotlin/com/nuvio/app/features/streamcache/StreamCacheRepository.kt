@@ -90,6 +90,16 @@ object StreamCacheRepository {
         refresh()
     }
 
+    fun setAutoFillWhilePlaying(enabled: Boolean) {
+        backend?.setAutoFillWhilePlaying(enabled)
+        refresh()
+    }
+
+    fun setLookAheadMinutes(minutes: Int) {
+        backend?.setLookAheadMinutes(minutes)
+        refresh()
+    }
+
     fun delete(id: String) {
         backend?.deleteEntry(id)
         refresh()

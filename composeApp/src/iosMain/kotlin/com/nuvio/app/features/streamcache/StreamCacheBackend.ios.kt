@@ -49,6 +49,14 @@ private object IosStreamCacheBackend : StreamCacheBackend {
         bridge?.setMaxBytes(maxBytes)
     }
 
+    override fun setAutoFillWhilePlaying(enabled: Boolean) {
+        bridge?.setAutoFillWhilePlaying(enabled)
+    }
+
+    override fun setLookAheadMinutes(minutes: Int) {
+        bridge?.setLookAheadMinutes(minutes)
+    }
+
     override fun listEntriesJson(): String = bridge?.listEntriesJson() ?: "[]"
 
     override fun deleteEntry(id: String) {

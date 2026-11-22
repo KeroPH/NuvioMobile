@@ -2618,6 +2618,12 @@
     <string name="stream_cache_limit_description">When the limit is reached, the oldest unpinned streams are removed first.</string>
     <string name="stream_cache_limit_unlimited">Unlimited</string>
     <string name="stream_cache_limit_footer">Caching pauses when less than %1$s is free on this device.</string>
+    <string name="stream_cache_auto_fill_title">Download whole video while watching</string>
+    <string name="stream_cache_auto_fill_description">Keeps downloading the rest of the video in the background while you watch, so it&apos;s fully saved for offline/rewatching. Uses more data.</string>
+    <string name="stream_cache_look_ahead_title">Buffer ahead</string>
+    <string name="stream_cache_look_ahead_description">How far ahead the player loads while streaming. Larger values smooth out slow connections; the buffer uses temporary storage, not memory. Applies to the next video you play.</string>
+    <string name="stream_cache_look_ahead_default">Player default</string>
+    <string name="stream_cache_look_ahead_minutes">%1$d min</string>
     <string name="stream_cache_section_items">Cached streams</string>
     <string name="stream_cache_clear_all">Clear all</string>
     <string name="stream_cache_clear_all_title">Clear the stream cache?</string>

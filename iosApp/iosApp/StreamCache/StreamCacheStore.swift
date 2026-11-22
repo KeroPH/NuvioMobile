@@ -43,6 +43,9 @@ final class StreamCacheEntryState {
     var activeSessions: Int = 0
     var isFilling: Bool = false
     var dirty: Bool = false
+    /// Most recent byte offset the proxy served/fetched for this entry (in memory only; -1 = none).
+    /// The filler starts from this region instead of byte 0.
+    var playheadOffset: Int64 = -1
 
     let directory: URL
     let dataURL: URL
@@ -131,6 +134,14 @@ final class StreamCacheStore {
 
     private static let enabledKey = "nuvio.streamcache.enabled"
     private static let maxBytesKey = "nuvio.streamcache.maxBytes"
+    private static let autoFillKey = "nuvio.streamcache.autoFill"
+    private static let lookAheadMinutesKey = "nuvio.streamcache.lookAheadMinutes"
+    static let defaultAutoFill = true
+    static let defaultLookAheadMinutes = 10
+    static let maxLookAheadMinutes = 60
+    /// The filler starts this far past the playhead so it doesn't race the player's own
+    /// requests for the bytes it needs right now.
+    static let fillLeadBytes: Int64 = 32 * 1024 * 1024
     private static let metaFileName = "meta.json"
     private static let knownVideoExtensions: Set<String> = [
         "mkv", "mp4", "m4v", "mov", "avi", "webm", "ts", "m2ts", "mts", "wmv",
@@ -332,6 +343,30 @@ final class StreamCacheStore {
         StreamCacheNotifier.shared.notify()
     }
 
+    /// Start a background fill of the whole file when playback of a not-yet-complete entry begins.
+    var autoFillWhilePlaying: Bool {
+        (UserDefaults.standard.object(forKey: StreamCacheStore.autoFillKey) as? Bool)
+            ?? StreamCacheStore.defaultAutoFill
+    }
+
+    func setAutoFillWhilePlaying(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: StreamCacheStore.autoFillKey)
+        StreamCacheNotifier.shared.notify()
+    }
+
+    /// mpv read-ahead in minutes (0 = mpv defaults), clamped to 0...60.
+    var lookAheadMinutes: Int {
+        let stored = (UserDefaults.standard.object(forKey: StreamCacheStore.lookAheadMinutesKey) as? NSNumber)?.intValue
+            ?? StreamCacheStore.defaultLookAheadMinutes
+        return min(max(stored, 0), StreamCacheStore.maxLookAheadMinutes)
+    }
+
+    func setLookAheadMinutes(_ minutes: Int) {
+        let clamped = min(max(minutes, 0), StreamCacheStore.maxLookAheadMinutes)
+        UserDefaults.standard.set(NSNumber(value: clamped), forKey: StreamCacheStore.lookAheadMinutesKey)
+        StreamCacheNotifier.shared.notify()
+    }
+
     /// Free space for important usage, cached for `maxAge` seconds. -1 when unknown.
     func freeDiskBytes(maxAge: TimeInterval = 5) -> Int64 {
         let now = Date().timeIntervalSince1970
@@ -377,6 +412,8 @@ final class StreamCacheStore {
             "minFreeBytes": NSNumber(value: StreamCacheStore.minFreeBytes),
             "usedBytes": NSNumber(value: usedBytes),
             "freeDiskBytes": NSNumber(value: freeDiskBytes(maxAge: 1)),
+            "autoFillWhilePlaying": autoFillWhilePlaying,
+            "lookAheadMinutes": NSNumber(value: lookAheadMinutes),
         ]
         return StreamCacheStore.jsonString(object) ?? "{}"
     }
@@ -648,13 +685,35 @@ final class StreamCacheStore {
               let raw = entry.meta.sourceUrl,
               let url = URL(string: raw) else { return nil }
         let total = entry.meta.totalBytes
+        // Fill from just ahead of where the player is reading, then wrap around to earlier gaps.
+        let anchor: Int64 = entry.playheadOffset >= 0 ? entry.playheadOffset + StreamCacheStore.fillLeadBytes : 0
         return StreamCacheFillSource(
             url: url,
             headers: entry.meta.headers,
             totalBytes: total,
             generation: entry.generation,
-            gap: total > 0 ? entry.ranges.firstGap(total: total) : nil
+            gap: total > 0 ? entry.ranges.firstGap(total: total, from: anchor) : nil
         )
+    }
+
+    /// Records the byte offset the proxy is currently serving for this entry (cheap; called often).
+    func notePlayhead(id: String, offset: Int64) {
+        lock.lock()
+        entries[id]?.playheadOffset = offset
+        lock.unlock()
+    }
+
+    /// True when an automatic "fill while playing" may start for this entry: it exists, is still
+    /// being played, its size is known (the proxy's ranged probe succeeded, so the server honours
+    /// Range), it is not complete and not already filling.
+    func canAutoFill(id: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[id] else { return false }
+        return entry.activeSessions > 0
+            && entry.meta.totalBytes > 0
+            && !entry.isFilling
+            && !entry.isComplete
     }
 
     /// Marks the entry as filling. Returns false if missing or already filling.

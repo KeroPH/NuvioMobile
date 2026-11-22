@@ -66,6 +66,10 @@ data class StreamCacheConfig(
     val minFreeBytes: Long = StreamCacheDefaults.MIN_FREE_BYTES,
     val usedBytes: Long = 0L,
     val freeDiskBytes: Long = -1L,
+    /** Automatically download the rest of the video in the background while it plays. */
+    val autoFillWhilePlaying: Boolean = StreamCacheDefaults.DEFAULT_AUTO_FILL,
+    /** How far ahead the player buffers, in minutes; 0 = player default (~150 MB). */
+    val lookAheadMinutes: Int = StreamCacheDefaults.DEFAULT_LOOK_AHEAD_MINUTES,
 )
 
 object StreamCacheDefaults {
@@ -74,6 +78,10 @@ object StreamCacheDefaults {
     const val MIN_FREE_BYTES: Long = 2L * GB
     /** Size-limit choices offered in the manager UI; 0 = unlimited. */
     val MAX_BYTES_OPTIONS: List<Long> = listOf(2L * GB, 5L * GB, 10L * GB, 20L * GB, 50L * GB, 100L * GB, 0L)
+    const val DEFAULT_AUTO_FILL: Boolean = true
+    const val DEFAULT_LOOK_AHEAD_MINUTES: Int = 10
+    /** Look-ahead choices offered in the manager UI; 0 = player default. */
+    val LOOK_AHEAD_MINUTES_OPTIONS: List<Int> = listOf(0, 5, 10, 20, 30)
 }
 
 data class StreamCacheItem(
@@ -98,6 +106,8 @@ interface StreamCacheBackend {
     fun getConfigJson(): String
     fun setEnabled(enabled: Boolean)
     fun setMaxBytes(maxBytes: Long)
+    fun setAutoFillWhilePlaying(enabled: Boolean)
+    fun setLookAheadMinutes(minutes: Int)
     fun listEntriesJson(): String
     fun deleteEntry(id: String)
     fun clearAll()

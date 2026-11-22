@@ -685,10 +685,62 @@ final class MPVPlayerViewController: UIViewController {
         isFileLoaded = false
         applyAudioLanguagePreferences(preferredAudioLanguages)
         startupSubtitles = request.subtitles
+        applyLookAhead(minutes: StreamCacheStore.shared.lookAheadMinutes)
         command("loadfile", args: [request.urlString, "replace"])
         if let audioUrl = request.audioUrl, !audioUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
                 self?.command("audio-add", args: [audioUrl, "select"], checkForErrors: false)
+            }
+        }
+    }
+
+    /// Read-ahead ("look-ahead") for the next `loadfile`. These are mpv options that are also
+    /// settable as properties at runtime; they take effect for the file loaded next. With
+    /// minutes > 0 the demuxer cache goes to a temp file (mpv unlinks it; it is not the
+    /// persistent stream cache) so a long window doesn't cost RAM. 0 restores mpv defaults.
+    /// Failures are logged only (e.g. an older mpv without `demuxer-cache-dir`).
+    private func applyLookAhead(minutes: Int) {
+        guard mpv != nil else { return }
+        let options: [(String, String)]
+        if minutes > 0 {
+            let seconds = minutes * 60
+            let cacheDirectory = (NSTemporaryDirectory() as NSString).appendingPathComponent("mpv-cache")
+            try? FileManager.default.createDirectory(
+                atPath: cacheDirectory,
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            // ~4 MB/s worth of the window, clamped to 512 MiB ... 6 GiB, and never more than
+            // half of the disk space above the stream cache's reserve.
+            var budgetMiB = min(max(seconds * 4, 512), 6 * 1024)
+            let freeBytes = StreamCacheStore.shared.freeDiskBytes()
+            if freeBytes >= 0 {
+                let spareMiB = Int((freeBytes - StreamCacheStore.minFreeBytes) / (2 * 1024 * 1024))
+                budgetMiB = min(budgetMiB, max(150, spareMiB))
+            }
+            options = [
+                ("cache", "yes"),
+                ("cache-on-disk", "yes"),
+                ("demuxer-cache-dir", cacheDirectory),
+                ("cache-secs", "\(seconds)"),
+                ("demuxer-readahead-secs", "\(seconds)"),
+                ("demuxer-max-bytes", "\(budgetMiB)MiB"),
+                ("demuxer-max-back-bytes", "256MiB"),
+            ]
+        } else {
+            options = [
+                ("cache", "auto"),
+                ("cache-on-disk", "no"),
+                ("cache-secs", "1000"),
+                ("demuxer-readahead-secs", "1"),
+                ("demuxer-max-bytes", "150MiB"),
+                ("demuxer-max-back-bytes", "50MiB"),
+            ]
+        }
+        for (name, value) in options {
+            let status = mpv_set_property_string(mpv, name, value)
+            if status < 0 {
+                print("[MPV] look-ahead: cannot set \(name)=\(value): \(String(cString: mpv_error_string(status)))")
             }
         }
     }
