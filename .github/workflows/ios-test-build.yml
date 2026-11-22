@@ -23,7 +23,7 @@ jobs:
   build:
     name: Build unsigned full ${{ inputs.configuration }} IPA
     runs-on: xcode-27
-    timeout-minutes: ${{ inputs.configuration == 'Release' && 75 || 30 }}
+    timeout-minutes: ${{ inputs.configuration == 'Release' && 180 || 60 }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       GRADLE_OPTS: -Dfile.encoding=UTF-8
@@ -64,6 +64,22 @@ jobs:
         run: |
           printf '%s' "${RELEASE_PROPERTIES_BASE64}" | base64 --decode > local.properties
           sed -i '' -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
+
+      - name: Configure Gradle memory
+        run: |
+          ram_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+          echo "Runner RAM: ${ram_gb} GB"
+          # The project asks for a 12 GB daemon heap; on a 7 GB runner that swaps heavily.
+          # User-home gradle.properties overrides the project's values.
+          if (( ram_gb >= 15 )); then heap=11g; else heap=5g; fi
+          mkdir -p "$HOME/.gradle"
+          {
+            echo "org.gradle.jvmargs=-Xmx${heap} -XX:MaxMetaspaceSize=1g -XX:+UseParallelGC -Dfile.encoding=UTF-8"
+            echo "org.gradle.parallel=false"
+            echo "org.gradle.workers.max=2"
+            echo "kotlin.daemon.jvmargs=-Xmx1g"
+          } > "$HOME/.gradle/gradle.properties"
+          cat "$HOME/.gradle/gradle.properties"
 
       - name: Prepare iOS dependencies
         run: ./scripts/prepare-ios-dependencies.sh
