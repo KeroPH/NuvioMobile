@@ -46,6 +46,8 @@ workflows:
           else
             echo "NUVIO_LOCAL_PROPERTIES_BASE64 not set; building without runtime secrets."
           fi
+          # Gradle's generateRuntimeConfigs task requires the file to exist (it may be empty).
+          touch local.properties
 
       - name: Prepare iOS dependencies
         script: |
