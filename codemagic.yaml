@@ -4,7 +4,9 @@
 
 workflows:
   ios-unsigned-ipa:
-    name: iOS unsigned full Debug IPA
+    name: iOS unsigned full Release IPA
+    # mac_mini_m2 has 8 GB RAM. The Release Kotlin/Native link is memory hungry; if it
+    # still runs out of memory, switch to a larger instance your plan offers (e.g. mac_mini_m4).
     instance_type: mac_mini_m2
     max_build_duration: 120
     environment:
@@ -19,10 +21,10 @@ workflows:
       #   - nuvio_secrets
       vars:
         GRADLE_OPTS: -Dfile.encoding=UTF-8
-        IOS_CONFIGURATION: Debug
-        KOTLIN_DAEMON_JVMARGS: -Xmx2048M
-        NUVIO_GRADLE_JVMARGS: -Xmx6144M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=1024M
-        NUVIO_KOTLIN_NATIVE_JVMARGS: -Xmx6144M
+        IOS_CONFIGURATION: Release
+        KOTLIN_DAEMON_JVMARGS: -Xmx1024M
+        # Daemon heap is set in ~/.gradle/gradle.properties by the "Configure Gradle memory"
+        # step below (ORG_GRADLE_PROJECT_* variables do not reach the Gradle daemon).
     cache:
       cache_paths:
         - $HOME/.konan
@@ -49,6 +51,21 @@ workflows:
           # Gradle's generateRuntimeConfigs task requires the file to exist (it may be empty).
           touch local.properties
 
+      - name: Configure Gradle memory
+        script: |
+          set -euo pipefail
+          echo "Machine RAM: $(( $(sysctl -n hw.memsize) / 1073741824 )) GB"
+          mkdir -p "$HOME/.gradle"
+          # User-home gradle.properties overrides the project's (which asks for 12 GB).
+          # Kotlin/Native compile + link run inside the Gradle daemon.
+          cat > "$HOME/.gradle/gradle.properties" <<'EOF'
+          org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -XX:+UseParallelGC -Dfile.encoding=UTF-8
+          org.gradle.parallel=false
+          org.gradle.workers.max=2
+          kotlin.daemon.jvmargs=-Xmx1g
+          EOF
+          cat "$HOME/.gradle/gradle.properties"
+
       - name: Prepare iOS dependencies
         script: |
           set -euo pipefail
@@ -62,7 +79,7 @@ workflows:
           # ../nuvio-engine, the path hard-coded in composeApp/build.gradle.kts.
           ./scripts/prepare-ios-dependencies.sh
 
-      - name: Build unsigned full Debug IPA
+      - name: Build unsigned full Release IPA
         script: |
           set -euo pipefail
           ./scripts/build-ios-ipa.sh
