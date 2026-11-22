@@ -1,16 +1,18 @@
 import Foundation
 import Network
 
-/// One `preparePlaybackUrl` call: maps a random token to an entry + upstream request.
+/// One `preparePlaybackUrl` / `entryPlaybackUrl` call: maps a random token to an entry + upstream request.
 final class StreamCacheSession {
     let token: String
     let entryId: String
-    let upstreamURL: URL
+    /// nil when an entry is played from the cache without a stored upstream URL: cached ranges
+    /// are served, requests touching uncached ranges fail.
+    let upstreamURL: URL?
     let headers: [String: String]
     /// Entry file name (the last path component of the playback URL).
     let fileName: String
 
-    init(token: String, entryId: String, upstreamURL: URL, headers: [String: String], fileName: String) {
+    init(token: String, entryId: String, upstreamURL: URL?, headers: [String: String], fileName: String) {
         self.token = token
         self.entryId = entryId
         self.upstreamURL = upstreamURL
@@ -32,6 +34,10 @@ final class StreamCacheProxy {
     /// Last successfully bound port; reused on restart so existing playback URLs keep working.
     private var lastPort: UInt16 = 0
     private var sessions: [String: StreamCacheSession] = [:]
+    /// `file://` playback URLs handed out for complete entries (`entryPlaybackUrl`), keyed by the
+    /// returned URL string: entry id + number of players currently using it. Each one holds an
+    /// "active" mark on the entry (no eviction/export) until `releasePlaybackURL`.
+    private var fileSessions: [String: (entryId: String, count: Int)] = [:]
     private var connections: [ObjectIdentifier: StreamCacheProxyConnection] = [:]
     private var connectionTokens: [ObjectIdentifier: String] = [:]
     private let listenerQueue = DispatchQueue(label: "com.nuvio.streamcache.listener")
@@ -175,7 +181,20 @@ final class StreamCacheProxy {
         return !sessions.isEmpty
     }
 
-    func registerSession(entryId: String, upstreamURL: URL, headers: [String: String], fileName: String) -> StreamCacheSession {
+    /// Registers a direct-file playback URL (complete entry) and marks the entry active.
+    /// Pair with `releasePlaybackURL(fileURLString)`.
+    func registerFileSession(entryId: String, fileURLString: String) {
+        lock.lock()
+        if let existing = fileSessions[fileURLString] {
+            fileSessions[fileURLString] = (entryId: existing.entryId, count: existing.count + 1)
+        } else {
+            fileSessions[fileURLString] = (entryId: entryId, count: 1)
+        }
+        lock.unlock()
+        StreamCacheStore.shared.markActive(id: entryId, delta: 1)
+    }
+
+    func registerSession(entryId: String, upstreamURL: URL?, headers: [String: String], fileName: String) -> StreamCacheSession {
         let token = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         let session = StreamCacheSession(
             token: token,
@@ -216,6 +235,21 @@ final class StreamCacheProxy {
 
     /// Removes the session, cancels its connections (and their upstream tasks), flushes meta.
     func releasePlaybackURL(_ playbackURL: String) {
+        lock.lock()
+        var releasedFileEntry: String?
+        if let fileSession = fileSessions[playbackURL] {
+            releasedFileEntry = fileSession.entryId
+            if fileSession.count <= 1 {
+                fileSessions.removeValue(forKey: playbackURL)
+            } else {
+                fileSessions[playbackURL] = (entryId: fileSession.entryId, count: fileSession.count - 1)
+            }
+        }
+        lock.unlock()
+        if let entryId = releasedFileEntry {
+            StreamCacheStore.shared.markActive(id: entryId, delta: -1)
+            return
+        }
         guard let token = StreamCacheProxy.token(fromPlaybackURL: playbackURL) else { return }
         lock.lock()
         let removed = sessions.removeValue(forKey: token)

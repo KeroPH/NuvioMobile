@@ -2642,6 +2642,11 @@
     <string name="stream_cache_action_stop">Stop downloading</string>
     <string name="stream_cache_action_save">Save to Downloads</string>
     <string name="stream_cache_saved">Saved to Downloads</string>
+    <string name="stream_cache_action_play">Play</string>
+    <string name="stream_cache_action_play_partial">Play saved part</string>
+    <string name="stream_cache_play_partial_note">Only the saved part plays offline. Parts that aren&apos;t saved yet need an internet connection.</string>
+    <string name="stream_cache_play_failed">Couldn&apos;t play this cached stream.</string>
+    <string name="stream_cache_provider_label">Stream cache</string>
     <string name="stream_cache_save_failed">Couldn&apos;t save to Downloads: %1$s</string>
     <string name="stream_cache_delete_title">Delete %1$s from the cache?</string>
     <string name="stream_cache_delete_message">This frees %1$s on this device.</string>

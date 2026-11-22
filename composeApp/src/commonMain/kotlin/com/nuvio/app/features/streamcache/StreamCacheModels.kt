@@ -103,6 +103,8 @@ data class StreamCacheUiState(
 interface StreamCacheBackend {
     fun preparePlaybackUrl(sourceUrl: String, headers: Map<String, String>, context: StreamCacheContext): String
     fun releasePlaybackUrl(playbackUrl: String)
+    /** See NuvioStreamCacheBridge.entryPlaybackUrl; null when not playable. */
+    fun entryPlaybackUrl(id: String): String?
     fun getConfigJson(): String
     fun setEnabled(enabled: Boolean)
     fun setMaxBytes(maxBytes: Long)

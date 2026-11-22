@@ -497,6 +497,67 @@ final class StreamCacheStore {
         return entries[id]?.meta.fileName
     }
 
+    /// What `entryPlaybackUrl` needs to play an entry straight from the cache (no stream lookup).
+    struct EntryPlaybackInfo {
+        let cachedBytes: Int64
+        let isComplete: Bool
+        let dataURL: URL
+        let fileName: String
+        /// Stored upstream URL/headers (may be nil for old/broken metadata).
+        let sourceUrl: URL?
+        let headers: [String: String]
+    }
+
+    func entryPlaybackInfo(id: String) -> EntryPlaybackInfo? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[id] else { return nil }
+        var source: URL?
+        if let raw = entry.meta.sourceUrl, !raw.isEmpty {
+            source = URL(string: raw)
+        }
+        return EntryPlaybackInfo(
+            cachedBytes: entry.ranges.totalLength,
+            isComplete: entry.isComplete,
+            dataURL: entry.dataURL,
+            fileName: entry.meta.fileName,
+            sourceUrl: source,
+            headers: entry.meta.headers
+        )
+    }
+
+    /// Prepares a complete entry's data file to be opened directly by the player: flushes pending
+    /// writes and cuts a stale tail beyond the real size (the sparse file may be longer).
+    /// Returns false when the entry is gone, not complete, or the file is missing.
+    func prepareFilePlayback(id: String) -> Bool {
+        lock.lock()
+        let found = entries[id]
+        lock.unlock()
+        guard let entry = found else { return false }
+
+        entry.ioLock.lock()
+        defer { entry.ioLock.unlock() }
+        lock.lock()
+        let complete = entries[id] === entry && entry.isComplete
+        let total = entry.meta.totalBytes
+        lock.unlock()
+        guard complete, total > 0, !entry.ioClosed else { return false }
+        let path = entry.dataURL.path
+        let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+        guard let fileSize = (attributes?[.size] as? NSNumber)?.int64Value, fileSize >= total else {
+            return false
+        }
+        if fileSize > total {
+            if let handle = openHandleLocked(entry) {
+                try? handle.truncate(atOffset: UInt64(total))
+            }
+        }
+        if let handle = entry.handle {
+            try? handle.synchronize()
+        }
+        return true
+    }
+
     func touch(id: String) {
         lock.lock()
         if let entry = entries[id] {
@@ -711,6 +772,7 @@ final class StreamCacheStore {
         defer { lock.unlock() }
         guard let entry = entries[id] else { return false }
         return entry.activeSessions > 0
+            && entry.meta.sourceUrl != nil
             && entry.meta.totalBytes > 0
             && !entry.isFilling
             && !entry.isComplete
@@ -853,7 +915,7 @@ final class StreamCacheStore {
         }
         guard entry.activeSessions == 0 else {
             lock.unlock()
-            return "This stream is currently playing"
+            return "Playing — try again after closing the player"
         }
         guard !entry.isFilling else {
             lock.unlock()

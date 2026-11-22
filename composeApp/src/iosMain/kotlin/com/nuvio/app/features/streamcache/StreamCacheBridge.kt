@@ -15,6 +15,15 @@ interface NuvioStreamCacheBridge {
      */
     fun preparePlaybackUrl(sourceUrl: String, headersJson: String, contextJson: String): String
 
+    /**
+     * URL to play a cached entry WITHOUT any stream lookup (works offline).
+     * Complete entry → `file://` URL of the cached data file (no proxy, no network).
+     * Partial entry  → a proxy URL backed by the entry's stored upstream URL/headers; cached
+     *                  ranges play offline, gaps need network. Pair with [releasePlaybackUrl].
+     * Returns "" when the entry doesn't exist or has no cached bytes.
+     */
+    fun entryPlaybackUrl(id: String): String
+
     /** The player that loaded [playbackUrl] is gone; stop upstream work for it. */
     fun releasePlaybackUrl(playbackUrl: String)
 

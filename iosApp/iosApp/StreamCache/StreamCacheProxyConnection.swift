@@ -208,7 +208,8 @@ final class StreamCacheProxyConnection: StreamCacheUpstreamReceiver {
             serveMain(session)
         } else {
             // Relative reference (e.g. from a manifest): resolve against the upstream URL.
-            guard let resolved = URL(string: restRaw + query, relativeTo: session.upstreamURL)?.absoluteURL else {
+            guard let base = session.upstreamURL,
+                  let resolved = URL(string: restRaw + query, relativeTo: base)?.absoluteURL else {
                 sendSimple(status: 404)
                 return
             }
@@ -222,17 +223,39 @@ final class StreamCacheProxyConnection: StreamCacheUpstreamReceiver {
         servingMain = true
         store.touch(id: session.entryId)
         guard let info = store.serveInfo(id: session.entryId) else {
-            // Entry was deleted while playing: plain pass-through.
-            startPassthrough(url: session.upstreamURL)
+            // Entry was deleted while playing: plain pass-through (if we know the upstream).
+            if let upstream = session.upstreamURL {
+                startPassthrough(url: upstream)
+            } else {
+                sendSimple(status: 404)
+            }
             return
+        }
+        // Sessions created by `entryPlaybackUrl` exist even when caching is disabled: still serve
+        // cached bytes, but don't store new ones.
+        if !store.isEnabled {
+            cacheWrites = false
         }
         generation = info.generation
         mimeType = info.mimeType ?? StreamCacheHTTP.mimeType(forFileName: session.fileName)
         totalBytes = info.totalBytes
         if totalBytes > 0 {
+            // Size known: no upstream probe. Cached spans are served from disk with zero network;
+            // only gaps (in `pump`) go upstream.
+            if session.upstreamURL == nil, !isHead,
+               let resolved = StreamCacheProxyConnection.resolve(rangeRequest, total: totalBytes),
+               store.cachedEnd(id: session.entryId, containing: resolved.start) == nil {
+                print("[StreamCache] uncached range requested and no upstream URL stored")
+                sendSimple(status: 502)
+                return
+            }
             if beginRangedResponse() {
                 pump()
             }
+            return
+        }
+        guard let upstream = session.upstreamURL else {
+            sendSimple(status: 502)
             return
         }
         let probeStart: Int64
@@ -242,7 +265,7 @@ final class StreamCacheProxyConnection: StreamCacheUpstreamReceiver {
         default:
             probeStart = 0
         }
-        startFetch(url: session.upstreamURL, kind: .probe, start: probeStart, segmentEnd: -1,
+        startFetch(url: upstream, kind: .probe, start: probeStart, segmentEnd: -1,
                    range: "bytes=\(probeStart)-", method: "GET")
     }
 
@@ -302,9 +325,14 @@ final class StreamCacheProxyConnection: StreamCacheUpstreamReceiver {
                 continue
             }
             // Missing: fetch up to the next cached span (or the requested end).
+            guard let upstream = session.upstreamURL else {
+                print("[StreamCache] gap at \(position) and no upstream URL stored; closing connection")
+                close()
+                return
+            }
             let nextCached = store.nextCachedStart(id: id, after: position) ?? totalBytes
             let segmentEnd = min(endInclusive, nextCached - 1)
-            startFetch(url: session.upstreamURL, kind: .segment, start: position, segmentEnd: segmentEnd,
+            startFetch(url: upstream, kind: .segment, start: position, segmentEnd: segmentEnd,
                        range: "bytes=\(position)-\(segmentEnd)", method: "GET")
             return
         }

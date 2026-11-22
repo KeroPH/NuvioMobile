@@ -46,6 +46,37 @@ Contract files (already written, do not change signatures without coordinating):
 - Size limit: LRU eviction of non-pinned, non-active, non-filling entries when used > maxBytes.
 - Files are excluded from iCloud backup.
 
+## Playing a cached entry directly (`entryPlaybackUrl(id)`, works offline)
+- No stream lookup; works regardless of the "enabled" setting (with caching disabled or low
+  disk the proxy serves cached bytes but stores nothing new). Returns "" when the entry is
+  missing or has 0 cached bytes.
+- Complete entry → `file://` URL of `data.<ext>` (stale tail beyond `totalBytes` is cut first);
+  mpv reads it directly, no proxy, no network. The proxy keeps a "file session" keyed by that
+  URL string which holds the entry's active mark (no eviction; export refuses with
+  "Playing — try again after closing the player") until `releasePlaybackUrl(<same URL>)`.
+  Delete/clear still proceed (mpv keeps its open fd).
+- Partial entry → normal proxy session (same token URL, entry marked active) built from the
+  stored `sourceUrl`/headers in meta. With a known `totalBytes` the proxy never probes upstream:
+  cached spans are served with zero network, only gaps go upstream. Without a stored
+  `sourceUrl`, gaps fail (502 before the head, or connection closed mid-body).
+- Auto-fill is scheduled as usual (only with a stored `sourceUrl`); offline it stops at once
+  with a single `fillError` ("No internet connection") instead of retrying.
+- The proxy listener binds 127.0.0.1 only and has no reachability requirement.
+
+## Offline playback of cached entries
+- `StreamCacheRepository.playbackUrlForEntry(id)` gives a file:// URL (complete) or a loopback
+  proxy URL (partial). Both bypass `preparePlaybackUrl` in PlayerEngine.ios.kt, and
+  `activeStreamCacheContext` refuses loopback/file URLs (`isStreamCacheLocalUrl`), so they are
+  never cached again and the surface never releases them.
+- MainAppContent owns playback: `openStreamCacheItem` (manager "Play"/"Play saved part", exposed
+  to the manager through `LocalStreamCachePlayHandler`) and `launchPlaybackWithDownloadPreference`
+  (details play, episode list, continue watching: download first, then a complete cache entry via
+  `findCompleteEntryForVideo`, then the normal stream lookup; skipped for manual source selection).
+  Both go through `launchStreamCachePlayback`, which always uses the internal player and attaches
+  the URL to the player launch id (`StreamCachePlaybackSessions`).
+- `disposeRouteResources(PlayerRoute)` calls `StreamCachePlaybackSessions.release(launchId)`, which
+  releases each attached URL exactly once.
+
 ## Fill while playing (auto-fill)
 - Setting `autoFillWhilePlaying` (UserDefaults `nuvio.streamcache.autoFill`, default on).
 - When `preparePlaybackUrl` returns a proxy URL and the setting is on, a fill is scheduled

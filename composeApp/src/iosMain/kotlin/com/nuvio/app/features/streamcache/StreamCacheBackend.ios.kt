@@ -39,6 +39,9 @@ private object IosStreamCacheBackend : StreamCacheBackend {
         bridge?.releasePlaybackUrl(playbackUrl)
     }
 
+    override fun entryPlaybackUrl(id: String): String? =
+        bridge?.entryPlaybackUrl(id)?.takeIf { it.isNotBlank() }
+
     override fun getConfigJson(): String = bridge?.getConfigJson() ?: "{}"
 
     override fun setEnabled(enabled: Boolean) {

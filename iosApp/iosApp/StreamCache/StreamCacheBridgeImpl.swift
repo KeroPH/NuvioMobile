@@ -104,6 +104,37 @@ final class StreamCacheBridgeImpl: NSObject, NuvioStreamCacheBridge {
         return proxy.playbackURL(port: port, session: session)
     }
 
+    /// Plays a cached entry without any stream lookup (works offline). Complete entry -> `file://`
+    /// URL of the data file (held "in use" until `releasePlaybackUrl` with that URL); partial entry
+    /// -> proxy URL backed by the stored upstream URL/headers. "" when missing / nothing cached.
+    /// Works regardless of the "enabled" setting (the proxy then doesn't store new bytes).
+    func entryPlaybackUrl(id: String) -> String {
+        let store = StreamCacheStore.shared
+        guard let info = store.entryPlaybackInfo(id: id), info.cachedBytes > 0 else { return "" }
+        let proxy = StreamCacheProxy.shared
+
+        if info.isComplete, store.prepareFilePlayback(id: id) {
+            let fileURLString = URL(fileURLWithPath: info.dataURL.path).absoluteString
+            proxy.registerFileSession(entryId: id, fileURLString: fileURLString)
+            return fileURLString
+        }
+
+        guard let port = proxy.ensureListening() else {
+            print("[StreamCache] proxy unavailable; cannot play cached entry \(id)")
+            return ""
+        }
+        let session = proxy.registerSession(
+            entryId: id,
+            upstreamURL: info.sourceUrl,
+            headers: info.headers,
+            fileName: info.fileName
+        )
+        if info.sourceUrl != nil, store.autoFillWhilePlaying {
+            StreamCacheBridgeImpl.scheduleAutoFill(id: id)
+        }
+        return proxy.playbackURL(port: port, session: session)
+    }
+
     /// Delay before an automatic fill starts, so the player's own first requests get the bandwidth.
     private static let autoFillDelay: TimeInterval = 8
 

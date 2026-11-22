@@ -32,6 +32,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -157,6 +158,10 @@ import com.nuvio.app.features.settings.MetaScreenSettingsScreen
 import com.nuvio.app.features.settings.PluginsSettingsScreen
 import com.nuvio.app.features.settings.SupportersContributorsSettingsScreen
 import com.nuvio.app.features.settings.ThemeSettingsRepository
+import com.nuvio.app.features.streamcache.LocalStreamCachePlayHandler
+import com.nuvio.app.features.streamcache.StreamCacheItem
+import com.nuvio.app.features.streamcache.StreamCachePlaybackSessions
+import com.nuvio.app.features.streamcache.StreamCacheRepository
 import com.nuvio.app.features.streams.BingeGroupCacheRepository
 import com.nuvio.app.features.streams.StreamAutoPlayPolicy
 import com.nuvio.app.features.streams.StreamLaunch
@@ -346,6 +351,7 @@ internal fun MainAppContent(
     val playbackAvailability = rememberPlaybackAvailability()
     val playbackUnavailableMessage = stringResource(Res.string.playback_unavailable_message)
     val downloadedProviderLabel = stringResource(Res.string.provider_downloaded)
+    val streamCacheProviderLabel = stringResource(Res.string.stream_cache_provider_label)
     val externalPlayerNotConfiguredText = stringResource(Res.string.external_player_not_configured)
     val externalPlayerUnavailableText = stringResource(Res.string.external_player_unavailable)
     val externalPlayerFailedText = stringResource(Res.string.external_player_failed)
@@ -886,6 +892,69 @@ internal fun MainAppContent(
             navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
         }
 
+        /**
+         * Opens [playbackUrl] (from StreamCacheRepository.playbackUrlForEntry) in the Nuvio player
+         * without any stream lookup. Always uses the internal player: the loopback proxy only lives
+         * while this app runs. The URL is released when the player route is disposed
+         * (disposeRouteResources -> StreamCachePlaybackSessions.release).
+         */
+        fun launchStreamCachePlayback(playbackUrl: String, playerLaunch: PlayerLaunch) {
+            val launchId = PlayerLaunchStore.put(playerLaunch)
+            StreamCachePlaybackSessions.attach(launchId, playbackUrl)
+            navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
+        }
+
+        fun openStreamCacheItem(item: StreamCacheItem) {
+            val context = item.context ?: return
+            val playbackUrl = StreamCacheRepository.playbackUrlForEntry(item.entry.id)
+            if (playbackUrl.isNullOrBlank()) {
+                coroutineScope.launch { NuvioToastController.show(getString(Res.string.stream_cache_play_failed)) }
+                return
+            }
+            if (!item.entry.isComplete) {
+                coroutineScope.launch { NuvioToastController.show(getString(Res.string.stream_cache_play_partial_note)) }
+            }
+            val videoId = context.videoId.trim()
+            val resumeEntry = videoId
+                .takeIf { it.isNotBlank() }
+                ?.let(WatchProgressRepository::progressForVideo)
+                ?.takeIf { it.isResumable }
+            val title = context.title.trim().ifBlank { item.entry.fileName }
+            launchStreamCachePlayback(
+                playbackUrl = playbackUrl,
+                playerLaunch = PlayerLaunch(
+                    profileId = activePlaybackProfileId,
+                    title = title,
+                    sourceUrl = playbackUrl,
+                    logo = context.logo,
+                    poster = context.poster,
+                    background = context.background,
+                    seasonNumber = context.seasonNumber,
+                    episodeNumber = context.episodeNumber,
+                    episodeTitle = context.episodeTitle,
+                    episodeThumbnail = context.episodeThumbnail,
+                    streamTitle = context.streamTitle.ifBlank { title },
+                    streamSubtitle = context.streamSubtitle,
+                    providerName = context.providerName.ifBlank { streamCacheProviderLabel },
+                    providerAddonId = context.providerAddonId,
+                    contentType = context.contentType.ifBlank { context.parentMetaType },
+                    videoId = videoId.takeIf { it.isNotBlank() },
+                    parentMetaId = context.parentMetaId,
+                    parentMetaType = context.parentMetaType,
+                    initialPositionMs = resumeEntry?.lastPositionMs?.takeIf { it > 0L } ?: 0L,
+                    initialProgressFraction = resumeEntry?.progressFraction?.takeIf { it > 0f },
+                    sourceFilename = context.fileName ?: item.entry.fileName.takeIf { it.isNotBlank() },
+                ),
+            )
+        }
+
+        // Stable handler for LocalStreamCachePlayHandler (always calls the latest closure).
+        val openStreamCacheItemAction: (StreamCacheItem) -> Unit = { item -> openStreamCacheItem(item) }
+        val latestOpenStreamCacheItem = rememberUpdatedState(openStreamCacheItemAction)
+        val streamCachePlayHandler: (StreamCacheItem) -> Unit = remember {
+            { item: StreamCacheItem -> latestOpenStreamCacheItem.value(item) }
+        }
+
         fun openExternalStreamUrl(url: String): Boolean {
             val opened = runCatching {
                 uriHandler.openUri(url)
@@ -1008,6 +1077,43 @@ internal fun MainAppContent(
                     navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
                     return
                 }
+
+                // No download: a fully cached stream plays offline without any stream lookup.
+                val cachedItem = StreamCacheRepository.findCompleteEntryForVideo(videoId)
+                val cachedContext = cachedItem?.context
+                val cachedPlaybackUrl = cachedItem?.let { StreamCacheRepository.playbackUrlForEntry(it.entry.id) }
+                if (cachedItem != null && cachedContext != null && !cachedPlaybackUrl.isNullOrBlank()) {
+                    launchStreamCachePlayback(
+                        playbackUrl = cachedPlaybackUrl,
+                        playerLaunch = PlayerLaunch(
+                            profileId = activePlaybackProfileId,
+                            title = title,
+                            sourceUrl = cachedPlaybackUrl,
+                            logo = logo ?: cachedContext.logo,
+                            poster = poster ?: cachedContext.poster,
+                            background = background ?: cachedContext.background,
+                            seasonNumber = seasonNumber ?: cachedContext.seasonNumber,
+                            episodeNumber = episodeNumber ?: cachedContext.episodeNumber,
+                            episodeTitle = episodeTitle ?: cachedContext.episodeTitle,
+                            episodeThumbnail = episodeThumbnail ?: cachedContext.episodeThumbnail,
+                            streamTitle = cachedContext.streamTitle.ifBlank { title },
+                            streamSubtitle = cachedContext.streamSubtitle,
+                            pauseDescription = pauseDescription,
+                            providerName = cachedContext.providerName.ifBlank { streamCacheProviderLabel },
+                            providerAddonId = cachedContext.providerAddonId,
+                            contentType = type,
+                            videoId = videoId,
+                            parentMetaId = parentMetaId,
+                            parentMetaType = parentMetaType,
+                            initialPositionMs = targetResumePositionMs,
+                            initialProgressFraction = targetResumeProgressFraction,
+                            sourceFilename = cachedContext.fileName
+                                ?: cachedItem.entry.fileName.takeIf { it.isNotBlank() },
+                        ),
+                    )
+                    return
+                }
+                cachedPlaybackUrl?.let(StreamCacheRepository::releasePlaybackUrl)
             }
 
             if (!PlaybackAvailability.current().canStream(type, videoId)) {
@@ -1338,6 +1444,7 @@ internal fun MainAppContent(
                     LocalUseNativeNavigation provides useNativeNavigation,
                     LocalNativeNavigationBarHidden provides (currentRoute?.hidesNavigationBar == true),
                     LocalVerticalBarPadding provides if (drawsUnderVerticalBar) verticalBarPadding else PaddingValues(),
+                    LocalStreamCachePlayHandler provides streamCachePlayHandler,
                 ) {
                 NavDisplay(
                     backStack = navBackStack,

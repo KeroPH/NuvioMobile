@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.Stop
@@ -56,6 +57,9 @@ import nuvio.composeapp.generated.resources.action_delete
 import nuvio.composeapp.generated.resources.details_actions_menu_label
 import nuvio.composeapp.generated.resources.stream_cache_action_finish
 import nuvio.composeapp.generated.resources.stream_cache_action_pin
+import nuvio.composeapp.generated.resources.stream_cache_action_play
+import nuvio.composeapp.generated.resources.stream_cache_action_play_partial
+import nuvio.composeapp.generated.resources.stream_cache_play_partial_note
 import nuvio.composeapp.generated.resources.stream_cache_action_save
 import nuvio.composeapp.generated.resources.stream_cache_action_stop
 import nuvio.composeapp.generated.resources.stream_cache_action_unpin
@@ -72,6 +76,7 @@ import nuvio.composeapp.generated.resources.stream_cache_storage_label
 import nuvio.composeapp.generated.resources.stream_cache_storage_of_limit
 import nuvio.composeapp.generated.resources.stream_cache_storage_unlimited
 import nuvio.composeapp.generated.resources.stream_cache_unknown_title
+import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
 
@@ -115,6 +120,10 @@ internal fun StreamCacheItem.landscapeArtwork(): String? {
     return listOf(context.episodeThumbnail, context.background, context.poster)
         .firstOrNull { !it.isNullOrBlank() }
 }
+
+/** "Play" for a fully cached entry, "Play saved part" otherwise. */
+internal fun StreamCacheEntry.playActionLabel(): StringResource =
+    if (isComplete) Res.string.stream_cache_action_play else Res.string.stream_cache_action_play_partial
 
 @Composable
 internal fun StreamCacheEntry.sizeText(): String {
@@ -249,6 +258,7 @@ internal fun StreamCacheStorageCard(
 @Composable
 internal fun StreamCacheRow(
     item: StreamCacheItem,
+    onPlay: (() -> Unit)?,
     onOpenActions: () -> Unit,
 ) {
     val tokens = MaterialTheme.nuvio
@@ -256,7 +266,7 @@ internal fun StreamCacheRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onOpenActions, onLongClick = onOpenActions),
+            .combinedClickable(onClick = onPlay ?: onOpenActions, onLongClick = onOpenActions),
         horizontalArrangement = Arrangement.spacedBy(NuvioTokens.Space.s12),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -351,6 +361,15 @@ internal fun StreamCacheRow(
                 )
             }
         }
+        if (onPlay != null) {
+            IconButton(onClick = onPlay) {
+                Icon(
+                    imageVector = Icons.Rounded.PlayArrow,
+                    contentDescription = stringResource(entry.playActionLabel()),
+                    tint = tokens.colors.accent,
+                )
+            }
+        }
         IconButton(onClick = onOpenActions) {
             Icon(
                 imageVector = Icons.Rounded.MoreVert,
@@ -432,6 +451,7 @@ internal fun StreamCacheEmptyState(
 internal fun StreamCacheActionSheet(
     item: StreamCacheItem?,
     onDismiss: () -> Unit,
+    onPlay: (() -> Unit)?,
     onTogglePinned: () -> Unit,
     onStartFill: () -> Unit,
     onCancelFill: () -> Unit,
@@ -466,6 +486,25 @@ internal fun StreamCacheActionSheet(
         ) {
             StreamCacheSheetHeader(item = item)
             NuvioBottomSheetDivider()
+            if (onPlay != null) {
+                NuvioBottomSheetActionRow(
+                    icon = Icons.Rounded.PlayArrow,
+                    title = stringResource(entry.playActionLabel()),
+                    onClick = { dismissAfter(onPlay) },
+                )
+                if (!entry.isComplete) {
+                    Text(
+                        text = stringResource(Res.string.stream_cache_play_partial_note),
+                        modifier = Modifier.padding(
+                            start = tokens.spacing.screenHorizontal,
+                            end = tokens.spacing.screenHorizontal,
+                            bottom = NuvioTokens.Space.s8,
+                        ),
+                        style = MaterialTheme.nuvioTypeScale.bodySm,
+                        color = tokens.colors.textMuted,
+                    )
+                }
+            }
             NuvioBottomSheetActionRow(
                 icon = Icons.Rounded.PushPin,
                 title = stringResource(

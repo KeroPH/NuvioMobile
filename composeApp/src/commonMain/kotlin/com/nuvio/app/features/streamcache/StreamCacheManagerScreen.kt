@@ -107,6 +107,7 @@ internal fun StreamCacheManagerContent(
     val config = uiState.config
     val items = uiState.items
     val coroutineScope = rememberCoroutineScope()
+    val playHandler = LocalStreamCachePlayHandler.current
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -206,6 +207,11 @@ internal fun StreamCacheManagerContent(
                 items.forEach { item ->
                     StreamCacheRow(
                         item = item,
+                        onPlay = if (playHandler != null && item.isPlayable()) {
+                            { playHandler(item) }
+                        } else {
+                            null
+                        },
                         onOpenActions = { actionsItemId = item.entry.id },
                     )
                 }
@@ -217,6 +223,11 @@ internal fun StreamCacheManagerContent(
     StreamCacheActionSheet(
         item = actionsItem,
         onDismiss = { actionsItemId = null },
+        onPlay = if (playHandler != null && actionsItem != null && actionsItem.isPlayable()) {
+            { playHandler(actionsItem) }
+        } else {
+            null
+        },
         onTogglePinned = {
             actionsItem?.let { StreamCacheRepository.setPinned(it.entry.id, !it.entry.pinned) }
         },

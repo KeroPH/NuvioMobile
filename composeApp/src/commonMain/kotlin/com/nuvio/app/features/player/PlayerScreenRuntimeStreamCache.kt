@@ -2,6 +2,7 @@ package com.nuvio.app.features.player
 
 import com.nuvio.app.features.streamcache.StreamCacheContext
 import com.nuvio.app.features.streamcache.StreamCacheContextRegistry
+import com.nuvio.app.features.streamcache.isStreamCacheLocalUrl
 
 /**
  * Describes the active stream for the persistent stream cache, or null when it must not be
@@ -11,6 +12,8 @@ internal fun PlayerScreenRuntime.activeStreamCacheContext(sourceUrl: String): St
     if (activeTorrentInfoHash != null) return null
     val normalizedUrl = sourceUrl.trim().lowercase()
     if (!normalizedUrl.startsWith("http://") && !normalizedUrl.startsWith("https://")) return null
+    // Already served from the stream cache (loopback proxy) or another local server: never cache again.
+    if (isStreamCacheLocalUrl(sourceUrl)) return null
     if (activeSourceAudioUrl != null) return null
     val videoId = activeVideoId?.trim()?.takeIf { it.isNotBlank() } ?: return null
 

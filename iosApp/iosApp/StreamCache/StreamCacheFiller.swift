@@ -73,6 +73,16 @@ final class StreamCacheFillJob: StreamCacheUpstreamReceiver {
     private static let chunkSize: Int64 = 8 * 1024 * 1024
     private static let maxRetries = 3
     static let expiredMessage = "Link expired — play it again to refresh the link"
+    static let offlineMessage = "No internet connection"
+
+    private static func isOfflineError(_ error: URLError) -> Bool {
+        switch error.code {
+        case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff:
+            return true
+        default:
+            return false
+        }
+    }
 
     let id: String
     private let queue: DispatchQueue
@@ -125,7 +135,9 @@ final class StreamCacheFillJob: StreamCacheUpstreamReceiver {
             return
         }
         guard let source = store.fillSource(id: id) else {
-            finish("Cache entry no longer exists")
+            finish(store.entryExists(id: id)
+                ? "No stream link stored — play it from the stream list to refresh the link"
+                : "Cache entry no longer exists")
             return
         }
         knownTotal = source.totalBytes
@@ -278,6 +290,12 @@ final class StreamCacheFillJob: StreamCacheUpstreamReceiver {
             return
         }
         let madeProgress = position > requestStart
+        if let urlError = error as? URLError, StreamCacheFillJob.isOfflineError(urlError) {
+            // No network (e.g. airplane mode while playing from the cache): stop right away with
+            // a single error instead of retrying.
+            finish(StreamCacheFillJob.offlineMessage)
+            return
+        }
         if error != nil || !responseAccepted || !madeProgress {
             if retries < StreamCacheFillJob.maxRetries {
                 retries += 1

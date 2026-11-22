@@ -76,6 +76,23 @@ object StreamCacheRepository {
         return runCatching { backend.preparePlaybackUrl(sourceUrl, headers, context) }.getOrDefault(sourceUrl)
     }
 
+    /**
+     * URL that plays cached entry [id] without any stream lookup (offline-capable):
+     * a file:// URL when complete, otherwise a proxy URL that must be released with
+     * [releasePlaybackUrl] when playback ends. Null when the entry isn't playable.
+     */
+    fun playbackUrlForEntry(id: String): String? = backend?.entryPlaybackUrl(id)
+
+    /** The fully cached entry for [videoId], if any (used to play offline without stream lookup). */
+    fun findCompleteEntryForVideo(videoId: String?): StreamCacheItem? {
+        val target = videoId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        if (backend == null) return null
+        refresh()
+        return _uiState.value.items
+            .filter { it.entry.isComplete && it.context?.videoId?.trim() == target }
+            .maxByOrNull { it.entry.lastAccessMs }
+    }
+
     fun releasePlaybackUrl(playbackUrl: String) {
         backend?.releasePlaybackUrl(playbackUrl)
     }

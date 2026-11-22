@@ -13,6 +13,7 @@ import com.nuvio.app.features.player.ExternalPlayerPlaybackRequest
 import com.nuvio.app.features.player.PlayerLaunch
 import com.nuvio.app.features.player.PlayerLaunchStore
 import com.nuvio.app.features.player.externalPlaybackSession
+import com.nuvio.app.features.streamcache.StreamCachePlaybackSessions
 import com.nuvio.app.features.streams.StreamLaunchStore
 import com.nuvio.app.features.streams.StreamsRepository
 import com.nuvio.app.features.watchprogress.ResumePromptRepository
@@ -63,6 +64,8 @@ internal fun disposeRouteResources(route: AppRoute) {
         is PlayerRoute -> {
             ResumePromptRepository.markPlayerExitedNormally()
             PlayerLaunchStore.remove(route.launchId)
+            // Offline playback of a stream-cache entry: release its file/proxy URL exactly once.
+            StreamCachePlaybackSessions.release(route.launchId)
         }
 
         is CatalogRoute -> {
