@@ -40,6 +40,32 @@ class ProfileSettingsCredentialPolicyTest {
     }
 
     @Test
+    fun `internal or external player choice stays on each device`() {
+        val local = buildJsonObject {
+            put("external_player_enabled", JsonPrimitive("true"))
+            put("external_player_id", JsonPrimitive("vlc"))
+            put("resize_mode", JsonPrimitive("fit"))
+        }
+        val remote = buildJsonObject {
+            put("external_player_enabled", JsonPrimitive("false"))
+            put("external_player_id", JsonPrimitive("infuse"))
+            put("external_player_forward_subtitles", JsonPrimitive("true"))
+            put("resize_mode", JsonPrimitive("zoom"))
+        }
+
+        val uploaded = withoutProfileCredentials(PROFILE_PLAYER_SETTINGS_FEATURE, local)
+        val merged = preservingLocalProfileCredentials(PROFILE_PLAYER_SETTINGS_FEATURE, remote, local)
+
+        assertFalse("external_player_enabled" in uploaded)
+        assertFalse("external_player_id" in uploaded)
+        assertEquals(JsonPrimitive("fit"), uploaded["resize_mode"])
+        assertEquals(JsonPrimitive("true"), merged["external_player_enabled"])
+        assertEquals(JsonPrimitive("vlc"), merged["external_player_id"])
+        assertFalse("external_player_forward_subtitles" in merged)
+        assertEquals(JsonPrimitive("zoom"), merged["resize_mode"])
+    }
+
+    @Test
     fun `legacy TMDB credentials are discarded from local and remote settings`() {
         val remote = buildJsonObject {
             put("tmdb_enabled", JsonPrimitive(true))

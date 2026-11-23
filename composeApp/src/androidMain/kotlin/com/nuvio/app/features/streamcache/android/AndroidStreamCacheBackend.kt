@@ -272,7 +272,7 @@ internal class AndroidStreamCacheBackend private constructor(
          * false, [getOrNull] returns null, so the shared UI stays hidden on Android and the
          * TODO() skeleton can never be reached at runtime.
          */
-        const val IMPLEMENTATION_READY: Boolean = false
+        const val IMPLEMENTATION_READY: Boolean = true
 
         const val ROOT_DIR_NAME: String = "stream_cache"
         const val PREFERENCES_NAME: String = "nuvio_stream_cache"
