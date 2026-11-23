@@ -27,7 +27,7 @@ concurrency:
 jobs:
   prepare:
     name: Prepare ${{ inputs.mode }} release
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-2-vcpu
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
@@ -139,7 +139,7 @@ jobs:
     name: Build Android APKs
     if: inputs.mode != 'dry-run'
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-2-vcpu
     env:
       RELEASE_VERSION: ${{ needs.prepare.outputs.tag }}
       RELEASE_PROPERTIES_BASE64: ${{ secrets.NUVIO_LOCAL_PROPERTIES_BASE64 }}
@@ -268,7 +268,7 @@ jobs:
       - prepare
       - android
       - ios
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-2-vcpu
     permissions:
       contents: write
     env:
