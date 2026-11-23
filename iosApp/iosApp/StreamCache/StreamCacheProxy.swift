@@ -278,10 +278,15 @@ final class StreamCacheProxy {
         connection.start()
     }
 
-    func associate(_ connection: StreamCacheProxyConnection, token: String) {
+    /// Links a connection to its session token. Returns false (without linking) if the session
+    /// was released meanwhile, so the caller can reject the request instead of serving an orphan.
+    @discardableResult
+    func associate(_ connection: StreamCacheProxyConnection, token: String) -> Bool {
         lock.lock()
+        defer { lock.unlock() }
+        guard sessions[token] != nil else { return false }
         connectionTokens[ObjectIdentifier(connection)] = token
-        lock.unlock()
+        return true
     }
 
     func connectionClosed(_ connection: StreamCacheProxyConnection) {

@@ -16,6 +16,7 @@ import com.nuvio.app.features.streams.StreamAutoPlayMode
 import com.nuvio.app.features.streams.StreamAutoPlaySelector
 import com.nuvio.app.features.streams.StreamAutoPlaySource
 import com.nuvio.app.features.streams.StreamItem
+import com.nuvio.app.features.watching.domain.isPastCompletionThreshold
 import com.nuvio.app.features.watching.domain.isShortPlaceholderDuration
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -48,7 +49,13 @@ internal fun PlayerScreenRuntime.isAtNextEpisodeThreshold(): Boolean {
             preloadNextEpisodeSources()
         }
     }
-    return playbackSnapshot.isEnded || PlayerNextEpisodeRules.shouldShowNextEpisodeCard(
+    // An end of stream only counts when the duration is unknown or the position is near the real
+    // end; a premature EOF (cut-off stream) must not jump to the next episode.
+    val endedNearEnd = playbackSnapshot.isEnded && (
+        playbackSnapshot.durationMs <= 0L ||
+            isPastCompletionThreshold(playbackSnapshot.positionMs, playbackSnapshot.durationMs)
+        )
+    return endedNearEnd || PlayerNextEpisodeRules.shouldShowNextEpisodeCard(
         positionMs = playbackSnapshot.positionMs,
         durationMs = playbackSnapshot.durationMs,
         skipIntervals = skipIntervals,

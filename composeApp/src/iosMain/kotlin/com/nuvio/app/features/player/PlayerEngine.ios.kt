@@ -3,6 +3,7 @@ package com.nuvio.app.features.player
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.RememberObserver
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -33,7 +34,6 @@ import com.nuvio.app.features.streamcache.StreamCacheContextRegistry
 import com.nuvio.app.features.streamcache.StreamCacheRepository
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.useContents
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.serialization.encodeToString
@@ -336,12 +336,14 @@ actual fun PlatformPlayerSurface(
         latestOnControllerReady.value(autoSyncController)
     }
 
-    // Load file and set initial state
-    // mpv may load a local caching proxy URL instead of sourceUrl (persistent stream cache); only
-    // streams with a context registered by the player screen are eligible. Everything else
-    // (AutoSync, hashing, subtitles) keeps using the original sourceUrl. Each prepared URL is
-    // released exactly once, when this effect is replaced or the surface leaves composition.
-    LaunchedEffect(bridge, sourceUrl, sourceAudioUrl, sourceHeaders, externalSubtitles) {
+    // Stream cache lease: mpv may load a local caching proxy URL instead of sourceUrl (persistent
+    // stream cache); only streams with a context registered by the player screen are eligible.
+    // Everything else (AutoSync, hashing, subtitles) keeps using the original sourceUrl.
+    // The lease is keyed only on the source itself, so reloads for other reasons (e.g. external
+    // subtitles arriving) reuse the same proxy session. It is declared before the
+    // DisposableEffect(bridge) below so that, on dispose (reverse order), the session is released
+    // only after mpv has been destroyed. Each prepared URL is released exactly once.
+    val streamCacheLease = remember(sourceUrl, sourceAudioUrl, sanitizedSourceHeaders) {
         val playbackUrl = if (sourceAudioUrl == null) {
             StreamCacheRepository.preparePlaybackUrl(
                 sourceUrl = sourceUrl,
@@ -351,24 +353,25 @@ actual fun PlatformPlayerSurface(
         } else {
             sourceUrl
         }
-        val usesStreamCache = playbackUrl != sourceUrl
-        try {
-            bridge.applyIosVideoOutputSettings(latestPlayerSettings.value)
-            bridge.loadFileWithAudio(
-                videoUrl = playbackUrl,
-                audioUrl = sourceAudioUrl,
-                // The proxy sends the original headers upstream itself.
-                headersJson = if (usesStreamCache) null else encodePlaybackHeadersForBridge(sourceHeaders),
-                subtitlesJson = encodeExternalSubtitlesForBridge(externalSubtitles),
-            )
-            if (playWhenReady) {
-                bridge.play()
-            } else {
-                bridge.pause()
-            }
-            if (usesStreamCache) awaitCancellation()
-        } finally {
-            if (usesStreamCache) StreamCacheRepository.releasePlaybackUrl(playbackUrl)
+        StreamCacheLease(sourceUrl = sourceUrl, playbackUrl = playbackUrl)
+    }
+    val playbackUrl = streamCacheLease.playbackUrl
+    val usesStreamCache = streamCacheLease.usesStreamCache
+
+    // Load file and set initial state
+    LaunchedEffect(bridge, playbackUrl, usesStreamCache, sourceAudioUrl, sourceHeaders, externalSubtitles) {
+        bridge.applyIosVideoOutputSettings(latestPlayerSettings.value)
+        bridge.loadFileWithAudio(
+            videoUrl = playbackUrl,
+            audioUrl = sourceAudioUrl,
+            // The proxy sends the original headers upstream itself.
+            headersJson = if (usesStreamCache) null else encodePlaybackHeadersForBridge(sourceHeaders),
+            subtitlesJson = encodeExternalSubtitlesForBridge(externalSubtitles),
+        )
+        if (playWhenReady) {
+            bridge.play()
+        } else {
+            bridge.pause()
         }
     }
 
@@ -481,6 +484,31 @@ actual fun PlatformPlayerSurface(
                 }
             }
         }
+    }
+}
+
+/**
+ * Holds one [StreamCacheRepository.preparePlaybackUrl] result for as long as it stays remembered.
+ * Releases the proxy session exactly once when forgotten (key change / leaving composition) or
+ * abandoned (composition discarded before being applied). No-op when no proxy URL was returned.
+ */
+private class StreamCacheLease(
+    sourceUrl: String,
+    val playbackUrl: String,
+) : RememberObserver {
+    val usesStreamCache: Boolean = playbackUrl != sourceUrl
+    private var released = false
+
+    override fun onRemembered() = Unit
+
+    override fun onForgotten() = release()
+
+    override fun onAbandoned() = release()
+
+    private fun release() {
+        if (released) return
+        released = true
+        if (usesStreamCache) StreamCacheRepository.releasePlaybackUrl(playbackUrl)
     }
 }
 

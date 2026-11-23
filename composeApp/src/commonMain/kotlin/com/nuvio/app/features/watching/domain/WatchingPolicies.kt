@@ -34,9 +34,19 @@ fun isProgressComplete(
     isEnded: Boolean,
 ): Boolean {
     if (isShortPlaceholderDuration(durationMs)) return false
-    if (isEnded) return true
-    if (durationMs <= 0L) return false
+    // An unknown duration that ended still counts (external players such as MX Player report only
+    // "ended"). With a known duration, an end of stream well before the real end (a cut-off stream,
+    // a premature EOF) must not mark the item watched, so it has to reach the same threshold.
+    if (durationMs <= 0L) return isEnded
+    return isPastCompletionThreshold(positionMs, durationMs)
+}
 
+/** True when [positionMs] reaches the watched threshold of a known [durationMs]. */
+fun isPastCompletionThreshold(
+    positionMs: Long,
+    durationMs: Long,
+): Boolean {
+    if (durationMs <= 0L) return false
     val watchedFraction = positionMs.toDouble() / durationMs.toDouble()
     return watchedFraction >= CompletionThresholdFraction
 }

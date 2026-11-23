@@ -79,6 +79,18 @@ class WatchProgressRulesTest {
     }
 
     @Test
+    fun `premature end of stream does not complete a known duration`() {
+        // Ended at 40% (e.g. a cut-off stream reporting EOF early) is not watched.
+        assertFalse(isWatchProgressComplete(positionMs = 400_000L, durationMs = 1_000_000L, isEnded = true))
+        assertFalse(isWatchProgressComplete(positionMs = 0L, durationMs = 1_000_000L, isEnded = true))
+        // Ended near the real end is watched.
+        assertTrue(isWatchProgressComplete(positionMs = 950_000L, durationMs = 1_000_000L, isEnded = true))
+        // Ended with an unknown duration (external players) is still watched.
+        assertTrue(isWatchProgressComplete(positionMs = 0L, durationMs = 0L, isEnded = true))
+        assertFalse(isWatchProgressComplete(positionMs = 400_000L, durationMs = 0L, isEnded = false))
+    }
+
+    @Test
     fun `resume entry for series picks most recent episode`() {
         val older = entry(videoId = "show:1:1", parentMetaId = "show", seasonNumber = 1, episodeNumber = 1, lastUpdatedEpochMs = 10L)
         val newer = entry(videoId = "show:1:2", parentMetaId = "show", seasonNumber = 1, episodeNumber = 2, lastUpdatedEpochMs = 20L)

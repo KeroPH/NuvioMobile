@@ -311,7 +311,12 @@ final class MPVPlayerViewController: UIViewController {
         }
         return controller
     }()
-    private lazy var eventQueue = DispatchQueue(label: "mpv-events", qos: .userInitiated)
+    private static let eventQueueKey = DispatchSpecificKey<Bool>()
+    private lazy var eventQueue: DispatchQueue = {
+        let queue = DispatchQueue(label: "mpv-events", qos: .userInitiated)
+        queue.setSpecific(key: MPVPlayerViewController.eventQueueKey, value: true)
+        return queue
+    }()
     private var recentPlaybackLogs: [String] = []
     private var activeRequestHeaders: [String: String] = [:]
     private var preferredAudioLanguages: [String] = []
@@ -710,9 +715,10 @@ final class MPVPlayerViewController: UIViewController {
                 withIntermediateDirectories: true,
                 attributes: nil
             )
-            // ~4 MB/s worth of the window, clamped to 512 MiB ... 6 GiB, and never more than
-            // half of the disk space above the stream cache's reserve.
-            var budgetMiB = min(max(seconds * 4, 512), 6 * 1024)
+            // Hard-capped at 512 MiB regardless of the window: demuxer packets can still be
+            // RAM-resident even with cache-on-disk, and iOS jetsams large footprints. Also never
+            // more than half of the disk space above the stream cache's reserve.
+            var budgetMiB = 512
             let freeBytes = StreamCacheStore.shared.freeDiskBytes()
             if freeBytes >= 0 {
                 let spareMiB = Int((freeBytes - StreamCacheStore.minFreeBytes) / (2 * 1024 * 1024))
@@ -725,7 +731,7 @@ final class MPVPlayerViewController: UIViewController {
                 ("cache-secs", "\(seconds)"),
                 ("demuxer-readahead-secs", "\(seconds)"),
                 ("demuxer-max-bytes", "\(budgetMiB)MiB"),
-                ("demuxer-max-back-bytes", "256MiB"),
+                ("demuxer-max-back-bytes", "128MiB"),
             ]
         } else {
             options = [
@@ -1095,8 +1101,19 @@ final class MPVPlayerViewController: UIViewController {
         clearPlaybackError()
         deactivateAudioSession()
         guard let ctx = mpv else { return }
-        mpv = nil  // nil first so event loop stops reading
-        mpv_terminate_destroy(ctx)
+        mpv = nil  // nil first so the event loop bails out on its next iteration
+        // Stop new wakeups (mpv serializes this with any in-flight callback), then drain the
+        // event loop so nothing touches ctx after it is freed. readEvents only dispatches
+        // async to main, so syncing from main cannot deadlock.
+        mpv_set_wakeup_callback(ctx, nil, nil)
+        if DispatchQueue.getSpecific(key: MPVPlayerViewController.eventQueueKey) != true {
+            eventQueue.sync {}
+        }
+        // metalLayer was handed to mpv unretained via "wid"; keep it alive until teardown ends.
+        let layer = metalLayer
+        withExtendedLifetime(layer) {
+            mpv_terminate_destroy(ctx)
+        }
     }
 
     private func activateAudioSessionForPlayback() {
@@ -1369,6 +1386,8 @@ final class MPVPlayerViewController: UIViewController {
             guard let self, let mpv = self.mpv else { return }
 
             while true {
+                // Bail out if the player was destroyed/replaced (pointer identity check).
+                guard let current = self.mpv, current == mpv else { return }
                 let event = mpv_wait_event(mpv, 0)
                 guard let eventPtr = event else { break }
                 if eventPtr.pointee.event_id == MPV_EVENT_NONE { break }
@@ -1417,9 +1436,9 @@ final class MPVPlayerViewController: UIViewController {
                     return
                 case MPV_EVENT_LOG_MESSAGE:
                     if let msg = UnsafeMutablePointer<mpv_event_log_message>(OpaquePointer(eventPtr.pointee.data)) {
-                        let prefix = String(cString: msg.pointee.prefix!)
-                        let level = String(cString: msg.pointee.level!)
-                        let text = String(cString: msg.pointee.text!)
+                        let prefix = msg.pointee.prefix.map { String(cString: $0) } ?? ""
+                        let level = msg.pointee.level.map { String(cString: $0) } ?? ""
+                        let text = msg.pointee.text.map { String(cString: $0) } ?? ""
                         self.appendPlaybackLog(prefix: prefix, level: level, text: text)
                         print("[MPV][\(prefix)] \(level): \(text)", terminator: "")
                     }

@@ -199,8 +199,13 @@ final class StreamCacheProxyConnection: StreamCacheUpstreamReceiver {
             sendSimple(status: 404)
             return
         }
+        // The session may be released between the lookup and association; associate re-checks
+        // the token under the proxy lock so we never leave an orphaned connection.
+        guard proxy.associate(self, token: components[2]) else {
+            sendSimple(status: 404)
+            return
+        }
         self.session = session
-        proxy.associate(self, token: components[2])
 
         let restRaw = components.count > 3 ? components[3...].joined(separator: "/") : ""
         let restDecoded = restRaw.removingPercentEncoding ?? restRaw

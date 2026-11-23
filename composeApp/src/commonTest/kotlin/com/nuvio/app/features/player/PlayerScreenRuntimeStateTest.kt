@@ -42,7 +42,28 @@ class PlayerScreenRuntimeStateTest {
         assertEquals(0L, runtime.playbackSnapshot.durationMs)
 
         runtime.updatePlaybackSnapshot(PlayerPlaybackSnapshot(durationMs = 121_000L))
-        runtime.updatePlaybackSnapshot(PlayerPlaybackSnapshot(isLoading = false, isEnded = true))
+        runtime.updatePlaybackSnapshot(PlayerPlaybackSnapshot(isLoading = false, isEnded = true, positionMs = 121_000L))
+        assertTrue(runtime.isAtNextEpisodeThreshold())
+    }
+
+    @Test
+    fun prematureEndOfStreamDoesNotReachTheNextEpisodeThreshold() {
+        val runtime = PlayerScreenRuntime(testPlayerScreenArgs())
+        runtime.updatePlaybackSnapshot(PlayerPlaybackSnapshot(
+            isLoading = false, isEnded = true, positionMs = 1_000_000L, durationMs = 2_500_000L,
+        ))
+        assertFalse(runtime.isAtNextEpisodeThreshold())
+
+        runtime.updatePlaybackSnapshot(PlayerPlaybackSnapshot(
+            isLoading = false, isEnded = true, positionMs = 2_375_000L, durationMs = 2_500_000L,
+        ))
+        assertTrue(runtime.isAtNextEpisodeThreshold())
+    }
+
+    @Test
+    fun endOfStreamWithUnknownDurationReachesTheNextEpisodeThreshold() {
+        val runtime = PlayerScreenRuntime(testPlayerScreenArgs())
+        runtime.updatePlaybackSnapshot(PlayerPlaybackSnapshot(isLoading = false, isEnded = true, positionMs = 5_000L))
         assertTrue(runtime.isAtNextEpisodeThreshold())
     }
 
